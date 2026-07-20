@@ -235,7 +235,6 @@ async function handleProductSelection(interaction: ButtonInteraction) {
   try {
     const channelId = await createTicketChannel(interaction.guild, interaction.user, pending.mcid, pending.purchaseId, product);
     clearRankPending(interaction.user.id);
-    await interaction.message.edit({ components: [] });
     await interaction.editReply(`✅ チケットを作成しました！スタッフが確認次第ロールが付与されます。\n<#${channelId}>`);
   } catch (err) {
     logger.error({ err }, "Failed to create rank ticket channel");
@@ -323,7 +322,6 @@ async function handleKeyNoMore(interaction: ButtonInteraction, targetUserId: str
   try {
     const channelId = await createKeyTicketChannel(interaction.guild, interaction.user, pending.mcid, pending.items);
     clearKeyPending(interaction.user.id);
-    await interaction.message.edit({ components: [] });
     await interaction.editReply(`✅ チケットを作成しました！スタッフが確認次第対応します。\n<#${channelId}>`);
   } catch (err) {
     logger.error({ err }, "Failed to create key ticket channel");
