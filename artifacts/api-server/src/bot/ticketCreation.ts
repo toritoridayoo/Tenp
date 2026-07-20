@@ -7,6 +7,7 @@ import {
   EmbedBuilder,
   Guild,
   PermissionFlagsBits,
+  TextChannel,
   User,
 } from "discord.js";
 import { botConfig } from "./config.js";
@@ -14,7 +15,7 @@ import { logger } from "../lib/logger.js";
 
 export type ProductType = "permanent" | "1month";
 
-const PRODUCT_LABELS: Record<ProductType, string> = {
+export const PRODUCT_LABELS: Record<ProductType, string> = {
   permanent: "Tori+ランク（永久版）🌟",
   "1month": "Tori+ランク（1ヶ月版）⏰",
 };
@@ -32,14 +33,14 @@ export async function createTicketChannel(
   const ticketChannel = await guild.channels.create({
     name: channelName,
     type: ChannelType.GuildText,
-    parent: botConfig.ticketChannelId, // category ID
+    parent: botConfig.ticketChannelId,
     permissionOverwrites: [
       {
-        id: guild.id, // @everyone — deny view
+        id: guild.id,
         deny: [PermissionFlagsBits.ViewChannel],
       },
       {
-        id: user.id, // ticket creator — allow view & send
+        id: user.id,
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
@@ -47,7 +48,7 @@ export async function createTicketChannel(
         ],
       },
       {
-        id: botConfig.staffRoleId, // staff — allow view & send
+        id: botConfig.staffRoleId,
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
@@ -57,7 +58,6 @@ export async function createTicketChannel(
     ],
   });
 
-  // The approve button customId encodes the duration so staff just clicks one button
   const approveCustomId =
     product === "permanent"
       ? `approve_permanent_${user.id}`
@@ -96,10 +96,44 @@ export async function createTicketChannel(
     components: [row],
   });
 
+  // Send log to the ticket log channel
+  await sendTicketLog(guild, user, mcid, purchaseId, product, ticketChannel.id);
+
   logger.info(
     { userId: user.id, mcid, purchaseId, product, channelId: ticketChannel.id },
     "Ticket channel created"
   );
 
   return ticketChannel.id;
+}
+
+async function sendTicketLog(
+  guild: Guild,
+  user: User,
+  mcid: string,
+  purchaseId: string,
+  product: ProductType,
+  ticketChannelId: string
+): Promise<void> {
+  try {
+    const logChannel = await guild.channels.fetch(botConfig.ticketLogChannelId);
+    if (!logChannel || !(logChannel instanceof TextChannel)) return;
+
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Blue)
+      .setTitle("🎫 新規チケット作成")
+      .addFields(
+        { name: "👤 申請者", value: `<@${user.id}> (${user.tag})`, inline: true },
+        { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+        { name: "🧾 購入番号", value: `\`${purchaseId}\``, inline: true },
+        { name: "📦 申請商品", value: PRODUCT_LABELS[product], inline: true },
+        { name: "📁 チケット", value: `<#${ticketChannelId}>`, inline: true }
+      )
+      .setTimestamp()
+      .setFooter({ text: `ユーザーID: ${user.id}` });
+
+    await logChannel.send({ embeds: [embed] });
+  } catch (err) {
+    logger.error({ err }, "Failed to send ticket log");
+  }
 }

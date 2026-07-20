@@ -10,6 +10,7 @@ import {
   Interaction,
   ModalBuilder,
   ModalSubmitInteraction,
+  TextChannel,
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
@@ -19,7 +20,7 @@ import { eq, and } from "drizzle-orm";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand } from "./panelCommand.js";
-import { createTicketChannel, type ProductType } from "./ticketCreation.js";
+import { createTicketChannel, PRODUCT_LABELS, type ProductType } from "./ticketCreation.js";
 import { setPending, getPending, clearPending } from "./pendingTickets.js";
 
 export async function handleInteraction(interaction: Interaction) {
@@ -85,6 +86,12 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
     return;
   }
 
+  // 付与完了 button
+  if (customId.startsWith("grant_complete_")) {
+    await handleGrantComplete(interaction);
+    return;
+  }
+
   // Approve / reject buttons
   const approveMatch = customId.match(/^approve_(1month|permanent)_(\d+)$/);
   const rejectMatch = customId.match(/^reject_(\d+)$/);
@@ -95,9 +102,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
 
   const member = interaction.member as GuildMember | null;
   if (!member || !member.roles.cache.has(botConfig.staffRoleId)) {
-    await interaction.editReply(
-      "❌ このボタンはスタッフロールを持つメンバーのみ押せます。"
-    );
+    await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ押せます。");
     return;
   }
 
@@ -121,8 +126,6 @@ async function handleProductSelection(interaction: ButtonInteraction) {
   await interaction.deferReply({ flags: 64 });
 
   const { customId, user, guild } = interaction;
-
-  // customId format: product_permanent_<userId> or product_1month_<userId>
   const match = customId.match(/^product_(permanent|1month)_(\d+)$/);
   if (!match || match[2] !== user.id) {
     await interaction.editReply("❌ 無効な操作です。");
@@ -130,7 +133,6 @@ async function handleProductSelection(interaction: ButtonInteraction) {
   }
 
   const product = match[1] as ProductType;
-
   const pending = getPending(user.id);
   if (!pending) {
     await interaction.editReply(
@@ -144,7 +146,6 @@ async function handleProductSelection(interaction: ButtonInteraction) {
     return;
   }
 
-  // Check for existing active grant
   const existing = await db
     .select()
     .from(roleGrantsTable)
@@ -159,33 +160,20 @@ async function handleProductSelection(interaction: ButtonInteraction) {
 
   if (existing.length > 0) {
     clearPending(user.id);
-    await interaction.editReply(
-      "⚠️ すでに有効なロールが付与されているか、処理中のチケットがあります。"
-    );
+    await interaction.editReply("⚠️ すでに有効なロールが付与されているか、処理中のチケットがあります。");
     return;
   }
 
   try {
-    const channelId = await createTicketChannel(
-      guild,
-      user,
-      pending.mcid,
-      pending.purchaseId,
-      product
-    );
+    const channelId = await createTicketChannel(guild, user, pending.mcid, pending.purchaseId, product);
     clearPending(user.id);
-
-    // Disable the selection buttons on the product choice message
     await interaction.message.edit({ components: [] });
-
     await interaction.editReply(
       `✅ チケットを作成しました！スタッフが確認次第ロールが付与されます。\n<#${channelId}>`
     );
   } catch (err) {
     logger.error({ err }, "Failed to create ticket channel");
-    await interaction.editReply(
-      "❌ チケットの作成中にエラーが発生しました。サーバー管理者にお問い合わせください。"
-    );
+    await interaction.editReply("❌ チケットの作成中にエラーが発生しました。サーバー管理者にお問い合わせください。");
   }
 }
 
@@ -200,10 +188,8 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   const purchaseId = interaction.fields.getTextInputValue("purchase_id_input").trim();
   const { user } = interaction;
 
-  // Save to in-memory pending store
   setPending(user.id, { mcid, purchaseId });
 
-  // Show product selection buttons
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`product_permanent_${user.id}`)
@@ -241,9 +227,7 @@ async function handleApprove(
   try {
     targetMember = await guild.members.fetch(targetUserId);
   } catch {
-    await interaction.editReply(
-      `❌ ユーザー <@${targetUserId}> がサーバーに見つかりません。退出した可能性があります。`
-    );
+    await interaction.editReply(`❌ ユーザー <@${targetUserId}> がサーバーに見つかりません。退出した可能性があります。`);
     return;
   }
 
@@ -251,12 +235,12 @@ async function handleApprove(
     await targetMember.roles.add(botConfig.grantRoleId, "Booth購入承認");
 
     const permanent = durationType === "permanent";
-    const expiresAt = permanent
-      ? null
-      : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const expiresAt = permanent ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const product: ProductType = permanent ? "permanent" : "1month";
 
     const purchaseId = extractFieldFromEmbed(interaction, "購入番号");
     const mcid = extractFieldFromEmbed(interaction, "Minecraft ID");
+    const productLabel = PRODUCT_LABELS[product];
 
     await db.insert(roleGrantsTable).values({
       guildId: guild.id,
@@ -270,47 +254,38 @@ async function handleApprove(
       removed: false,
     });
 
-    const durationText = permanent
-      ? "🌟 永久版"
-      : `⏰ 1ヶ月版（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`;
-
-    const embed = new EmbedBuilder()
+    // 1. Update ticket embed to "承認済み" and remove buttons
+    const approvedEmbed = new EmbedBuilder()
       .setColor(Colors.Green)
-      .setTitle("✅ 承認済み")
-      .setDescription(`<@${targetUserId}> のロール申請が承認されました。`)
+      .setTitle("✅ 承認済み — チケット終了")
       .addFields(
+        { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
         { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``, inline: true },
         { name: "🧾 購入番号", value: `\`${purchaseId ?? "不明"}\``, inline: true },
-        { name: "付与期間", value: durationText, inline: false },
+        { name: "📦 商品", value: productLabel, inline: true },
         { name: "承認スタッフ", value: `<@${interaction.user.id}>`, inline: true },
-        { name: "付与ロール", value: `<@&${botConfig.grantRoleId}>`, inline: true }
+        {
+          name: "付与期間",
+          value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`,
+          inline: true,
+        }
       )
       .setTimestamp();
 
-    await interaction.message.edit({ embeds: [embed], components: [] });
+    await interaction.message.edit({ embeds: [approvedEmbed], components: [] });
 
-    // Notify in the ticket channel
-    try {
-      if (interaction.channel && "send" in interaction.channel) {
-        await (interaction.channel as { send: (msg: string) => Promise<unknown> }).send(
-          `✅ <@${targetUserId}> のロール申請が承認されました！` +
-            (permanent
-              ? ""
-              : `\n⏰ 期限: ${expiresAt!.toLocaleDateString("ja-JP")} に自動削除されます。`)
-        );
-      }
-    } catch { /* non-fatal */ }
+    // 2. Send to approval channel with 付与完了 button
+    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id);
 
-    await interaction.editReply(
-      `✅ <@${targetUserId}> にロールを付与しました（${permanent ? "永久版" : "1ヶ月版"}）`
-    );
+    // 3. Close (delete) the ticket channel after 5 seconds
+    await closeTicketChannel(interaction, targetUserId, "承認");
+
+    await interaction.editReply(`✅ <@${targetUserId}> を承認しました。チケットを閉じます。`);
 
     logger.info({ targetUserId, durationType, mcid, grantedBy: interaction.user.id }, "Role granted");
   } catch (err) {
     logger.error({ err }, "Failed to grant role");
-    await interaction.editReply(
-      "❌ ロールの付与中にエラーが発生しました。ボットのロール順位を確認してください。"
-    );
+    await interaction.editReply("❌ ロールの付与中にエラーが発生しました。ボットのロール順位を確認してください。");
   }
 }
 
@@ -318,28 +293,24 @@ async function handleApprove(
 
 async function handleReject(interaction: ButtonInteraction, targetUserId: string) {
   try {
-    const embed = new EmbedBuilder()
+    const rejectedEmbed = new EmbedBuilder()
       .setColor(Colors.Red)
-      .setTitle("❌ 却下")
-      .setDescription(`<@${targetUserId}> のロール申請が却下されました。`)
-      .addFields({
-        name: "却下スタッフ",
-        value: `<@${interaction.user.id}>`,
-        inline: true,
-      })
+      .setTitle("❌ 却下 — チケット終了")
+      .addFields(
+        { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
+        { name: "却下スタッフ", value: `<@${interaction.user.id}>`, inline: true }
+      )
       .setTimestamp();
 
-    await interaction.message.edit({ embeds: [embed], components: [] });
+    await interaction.message.edit({ embeds: [rejectedEmbed], components: [] });
 
-    try {
-      if (interaction.channel && "send" in interaction.channel) {
-        await (interaction.channel as { send: (msg: string) => Promise<unknown> }).send(
-          `❌ <@${targetUserId}> のロール申請は却下されました。ご不明な点はスタッフにお問い合わせください。`
-        );
-      }
-    } catch { /* non-fatal */ }
+    // Send reject log
+    await sendRejectLog(interaction.guild as Guild, targetUserId, interaction.user.id);
 
-    await interaction.editReply(`✅ <@${targetUserId}> の申請を却下しました。`);
+    // Close ticket channel after 5 seconds
+    await closeTicketChannel(interaction, targetUserId, "却下");
+
+    await interaction.editReply(`✅ <@${targetUserId}> の申請を却下しました。チケットを閉じます。`);
     logger.info({ targetUserId, rejectedBy: interaction.user.id }, "Ticket rejected");
   } catch (err) {
     logger.error({ err }, "Failed to reject ticket");
@@ -347,12 +318,124 @@ async function handleReject(interaction: ButtonInteraction, targetUserId: string
   }
 }
 
+// ── 付与完了 button ──────────────────────────────────────────────────────────
+
+async function handleGrantComplete(interaction: ButtonInteraction) {
+  await interaction.deferReply({ flags: 64 });
+
+  const member = interaction.member as GuildMember | null;
+  if (!member || !member.roles.cache.has(botConfig.staffRoleId)) {
+    await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ押せます。");
+    return;
+  }
+
+  try {
+    const completedEmbed = new EmbedBuilder()
+      .setColor(Colors.DarkGreen)
+      .setTitle("🎮 ゲーム内付与完了")
+      .setDescription("ゲーム内でのランク付与が完了しました。")
+      .addFields(
+        ...interaction.message.embeds[0]!.fields,
+        { name: "✅ 完了スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+        { name: "完了時刻", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
+      )
+      .setTimestamp();
+
+    await interaction.message.edit({ embeds: [completedEmbed], components: [] });
+    await interaction.editReply("✅ 付与完了としてマークしました。");
+
+    logger.info({ completedBy: interaction.user.id }, "Grant marked complete");
+  } catch (err) {
+    logger.error({ err }, "Failed to mark grant complete");
+    await interaction.editReply("❌ エラーが発生しました。");
+  }
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function extractFieldFromEmbed(
+async function sendApprovalNotification(
+  guild: Guild,
+  targetUserId: string,
+  mcid: string,
+  productLabel: string,
+  permanent: boolean,
+  expiresAt: Date | null,
+  approvedBy: string
+): Promise<void> {
+  try {
+    const approvalChannel = await guild.channels.fetch(botConfig.approvalChannelId);
+    if (!approvalChannel || !(approvalChannel instanceof TextChannel)) return;
+
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Gold)
+      .setTitle("🎮 ロール付与 — ゲーム内反映確認")
+      .setDescription(`<@${targetUserId}> が承認されました。ゲーム内でランクを付与後、下のボタンを押してください。`)
+      .addFields(
+        { name: "👤 プレイヤー", value: `<@${targetUserId}>`, inline: true },
+        { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+        { name: "📦 商品", value: productLabel, inline: true },
+        {
+          name: "⏰ 付与期間",
+          value: permanent ? "永久" : `1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`,
+          inline: true,
+        },
+        { name: "承認スタッフ", value: `<@${approvedBy}>`, inline: true }
+      )
+      .setTimestamp();
+
+    // Encode userId in the customId for reference
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`grant_complete_${targetUserId}`)
+        .setLabel("✅ ゲーム内付与完了")
+        .setStyle(ButtonStyle.Success)
+    );
+
+    await approvalChannel.send({ embeds: [embed], components: [row] });
+  } catch (err) {
+    logger.error({ err }, "Failed to send approval notification");
+  }
+}
+
+async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: string): Promise<void> {
+  try {
+    const logChannel = await guild.channels.fetch(botConfig.ticketLogChannelId);
+    if (!logChannel || !(logChannel instanceof TextChannel)) return;
+
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Red)
+      .setTitle("❌ チケット却下")
+      .addFields(
+        { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
+        { name: "却下スタッフ", value: `<@${rejectedBy}>`, inline: true }
+      )
+      .setTimestamp();
+
+    await logChannel.send({ embeds: [embed] });
+  } catch (err) {
+    logger.error({ err }, "Failed to send reject log");
+  }
+}
+
+async function closeTicketChannel(
   interaction: ButtonInteraction,
-  fieldNameFragment: string
-): string | null {
+  targetUserId: string,
+  reason: string
+): Promise<void> {
+  const channel = interaction.channel;
+  if (!channel || !(channel instanceof TextChannel)) return;
+
+  try {
+    await channel.send(`🔒 このチケットは**${reason}**により閉じられます。5秒後にチャンネルを削除します。`);
+    setTimeout(() => {
+      channel.delete(`チケット${reason}: ${targetUserId}`).catch(() => {});
+    }, 5000);
+  } catch (err) {
+    logger.error({ err }, "Failed to close ticket channel");
+  }
+}
+
+function extractFieldFromEmbed(interaction: ButtonInteraction, fieldNameFragment: string): string | null {
   try {
     const embed = interaction.message.embeds[0];
     if (!embed) return null;
