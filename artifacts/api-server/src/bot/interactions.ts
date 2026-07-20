@@ -81,19 +81,29 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   if (keyAddMatch)  { await handleKeyAddMore(interaction, keyAddMatch[1]!);  return; }
   if (keyDoneMatch) { await handleKeyNoMore(interaction, keyDoneMatch[1]!);  return; }
 
-  // Rank: approve / reject
-  const approveMatch = customId.match(/^approve_(1month|permanent)_(\d+)$/);
-  const rejectMatch  = customId.match(/^reject_(\d+)$/);
+  // Reject buttons: must show modal BEFORE any deferReply
+  const rejectMatch      = customId.match(/^reject_(\d+)$/);
+  const keyRejectMatch   = customId.match(/^key_reject_(\d+)$/);
+  const mediaRejectMatch = customId.match(/^media_reject_(\d+)$/);
 
-  // Key: approve / reject
-  const keyApproveMatch = customId.match(/^key_approve_(\d+)$/);
-  const keyRejectMatch  = customId.match(/^key_reject_(\d+)$/);
+  if (rejectMatch || keyRejectMatch || mediaRejectMatch) {
+    const member = interaction.member as GuildMember | null;
+    if (!member || !member.roles.cache.has(botConfig.staffRoleId)) {
+      await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
+      return;
+    }
+    const targetId  = (rejectMatch ?? keyRejectMatch ?? mediaRejectMatch)![1]!;
+    const type      = rejectMatch ? "rank" : keyRejectMatch ? "key" : "media";
+    await interaction.showModal(buildRejectReasonModal(type, targetId, interaction.message.id));
+    return;
+  }
 
-  // Media: approve / reject
+  // Approve buttons
+  const approveMatch      = customId.match(/^approve_(1month|permanent)_(\d+)$/);
+  const keyApproveMatch   = customId.match(/^key_approve_(\d+)$/);
   const mediaApproveMatch = customId.match(/^media_approve_(\d+)$/);
-  const mediaRejectMatch  = customId.match(/^media_reject_(\d+)$/);
 
-  if (!approveMatch && !rejectMatch && !keyApproveMatch && !keyRejectMatch && !mediaApproveMatch && !mediaRejectMatch) return;
+  if (!approveMatch && !keyApproveMatch && !mediaApproveMatch) return;
 
   await interaction.deferReply({ flags: 64 });
 
@@ -103,11 +113,8 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
     return;
   }
 
-  if (rejectMatch)       { await handleRankReject(interaction, rejectMatch[1]!); return; }
   if (approveMatch)      { await handleRankApprove(interaction, approveMatch[2]!, approveMatch[1] as "1month" | "permanent"); return; }
-  if (keyRejectMatch)    { await handleKeyReject(interaction, keyRejectMatch[1]!); return; }
   if (keyApproveMatch)   { await handleKeyApprove(interaction, keyApproveMatch[1]!); return; }
-  if (mediaRejectMatch)  { await handleMediaReject(interaction, mediaRejectMatch[1]!); return; }
   if (mediaApproveMatch) { await handleMediaApprove(interaction, mediaApproveMatch[1]!); return; }
 }
 
@@ -164,6 +171,25 @@ function buildMediaModal(): ModalBuilder {
   return modal;
 }
 
+function buildRejectReasonModal(type: "rank" | "key" | "media", targetId: string, messageId: string): ModalBuilder {
+  const titles = { rank: "🎮 ランク申請を却下", key: "🔑 鍵・シャード申請を却下", media: "📺 メディアランク申請を却下" };
+  const modal = new ModalBuilder()
+    .setCustomId(`reject_reason_${type}_${targetId}_${messageId}`)
+    .setTitle(titles[type]);
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("reason_input")
+        .setLabel("却下理由")
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder("例: 購入番号が確認できませんでした。")
+        .setMaxLength(500)
+        .setRequired(true)
+    )
+  );
+  return modal;
+}
+
 function buildKeyAddModal(): ModalBuilder {
   const modal = new ModalBuilder().setCustomId("key_add_modal").setTitle("🔑 追加の購入番号を入力");
   modal.addComponents(
@@ -183,6 +209,10 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   if (interaction.customId === "key_modal")     { await handleKeyModalSubmit(interaction);   return; }
   if (interaction.customId === "key_add_modal") { await handleKeyAddModalSubmit(interaction);return; }
   if (interaction.customId === "media_modal")   { await handleMediaModalSubmit(interaction); return; }
+
+  // Reject reason modals: reject_reason_{type}_{userId}_{messageId}
+  const rejectModal = interaction.customId.match(/^reject_reason_(rank|key|media)_(\d+)_(\d+)$/);
+  if (rejectModal) { await handleRejectReasonSubmit(interaction, rejectModal[1] as "rank" | "key" | "media", rejectModal[2]!, rejectModal[3]!); return; }
 }
 
 // ── Rank modal → product selection ────────────────────────────────────────
@@ -460,7 +490,15 @@ async function handleRankApprove(
     });
 
     await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id);
-    await closeTicketChannel(interaction, targetUserId, "承認");
+    await sendDM(targetMember, new EmbedBuilder()
+      .setColor(Colors.Green).setTitle("✅ ロール申請が承認されました")
+      .setDescription(`あなたのロール申請が承認されました！`)
+      .addFields(
+        { name: "📦 商品", value: productLabel, inline: true },
+        { name: "付与期間", value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true }
+      ).setTimestamp()
+    );
+    await closeTicketChannel(interaction.channel as TextChannel | null, targetUserId, "承認");
     await interaction.editReply(`✅ <@${targetUserId}> を承認しました。チケットを閉じます。`);
     logger.info({ targetUserId, durationType, mcid, grantedBy: interaction.user.id }, "Rank role granted");
   } catch (err) {
@@ -469,25 +507,63 @@ async function handleRankApprove(
   }
 }
 
-// ── Rank: reject ──────────────────────────────────────────────────────────
+// ── Reject reason modal submit ────────────────────────────────────────────
 
-async function handleRankReject(interaction: ButtonInteraction, targetUserId: string) {
+async function handleRejectReasonSubmit(
+  interaction: ModalSubmitInteraction,
+  type: "rank" | "key" | "media",
+  targetUserId: string,
+  messageId: string,
+) {
+  await interaction.deferReply({ flags: 64 });
+
+  const member = interaction.member as GuildMember | null;
+  if (!member || !member.roles.cache.has(botConfig.staffRoleId)) {
+    await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ操作できます。");
+    return;
+  }
+
+  const reason = interaction.fields.getTextInputValue("reason_input").trim();
+  const guild  = interaction.guild as Guild;
+  const typeLabels = { rank: "ランク申請", key: "鍵・シャード受け取り", media: "メディアランク申請" };
+
   try {
-    await interaction.message.edit({
-      embeds: [
-        new EmbedBuilder().setColor(Colors.Red).setTitle("❌ 却下 — チケット終了")
-          .addFields(
-            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
-            { name: "却下スタッフ", value: `<@${interaction.user.id}>`, inline: true }
-          ).setTimestamp()
-      ],
-      components: [],
-    });
-    await sendRejectLog(interaction.guild as Guild, targetUserId, interaction.user.id, "ランク申請");
-    await closeTicketChannel(interaction, targetUserId, "却下");
+    // Update the ticket channel message
+    const channel = interaction.channel as TextChannel | null;
+    if (channel) {
+      const ticketMsg = await channel.messages.fetch(messageId).catch(() => null);
+      if (ticketMsg) {
+        await ticketMsg.edit({
+          embeds: [
+            new EmbedBuilder().setColor(Colors.Red).setTitle("❌ 却下 — チケット終了")
+              .addFields(
+                { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
+                { name: "却下スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+                { name: "❌ 却下理由", value: reason, inline: false }
+              ).setTimestamp()
+          ],
+          components: [],
+        });
+      }
+    }
+
+    // DM the user
+    const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
+    if (targetMember) {
+      await sendDM(targetMember, new EmbedBuilder()
+        .setColor(Colors.Red).setTitle("❌ 申請が却下されました")
+        .setDescription(`あなたの${typeLabels[type]}が却下されました。`)
+        .addFields({ name: "却下理由", value: reason, inline: false })
+        .setTimestamp()
+      );
+    }
+
+    await sendRejectLog(guild, targetUserId, interaction.user.id, typeLabels[type], reason);
+    await closeTicketChannel(channel, targetUserId, "却下");
     await interaction.editReply(`✅ <@${targetUserId}> の申請を却下しました。`);
+    logger.info({ targetUserId, type, reason, rejectedBy: interaction.user.id }, "Ticket rejected");
   } catch (err) {
-    logger.error({ err }, "Failed to reject rank ticket");
+    logger.error({ err }, "Failed to reject ticket");
     await interaction.editReply("❌ 却下処理中にエラーが発生しました。");
   }
 }
@@ -514,7 +590,19 @@ async function handleKeyApprove(interaction: ButtonInteraction, targetUserId: st
     });
 
     await sendKeyApprovalNotification(interaction.guild as Guild, targetUserId, mcid ?? "不明", interaction.message.embeds[0]!.fields, interaction.user.id);
-    await closeTicketChannel(interaction, targetUserId, "付与済み");
+    const keyTargetMember = await (interaction.guild as Guild).members.fetch(targetUserId).catch(() => null);
+    if (keyTargetMember) {
+      const itemSummary = interaction.message.embeds[0]!.fields
+        .filter((f) => f.name.startsWith("📦 アイテム"))
+        .map((f) => f.value).join("\n");
+      await sendDM(keyTargetMember, new EmbedBuilder()
+        .setColor(Colors.Green).setTitle("✅ 鍵・シャード申請が承認されました")
+        .setDescription(`あなたの鍵・シャード受け取り申請が承認されました！`)
+        .addFields({ name: "📦 申請内容", value: itemSummary || "詳細はチケットをご確認ください", inline: false })
+        .setTimestamp()
+      );
+    }
+    await closeTicketChannel(interaction.channel as TextChannel | null, targetUserId, "付与済み");
     await interaction.editReply(`✅ <@${targetUserId}> の鍵・シャード付与を確認しました。チケットを閉じます。`);
     logger.info({ targetUserId }, "Key ticket approved");
   } catch (err) {
@@ -523,28 +611,6 @@ async function handleKeyApprove(interaction: ButtonInteraction, targetUserId: st
   }
 }
 
-// ── Key: reject ───────────────────────────────────────────────────────────
-
-async function handleKeyReject(interaction: ButtonInteraction, targetUserId: string) {
-  try {
-    await interaction.message.edit({
-      embeds: [
-        new EmbedBuilder().setColor(Colors.Red).setTitle("❌ 却下 — チケット終了")
-          .addFields(
-            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
-            { name: "却下スタッフ", value: `<@${interaction.user.id}>`, inline: true }
-          ).setTimestamp()
-      ],
-      components: [],
-    });
-    await sendRejectLog(interaction.guild as Guild, targetUserId, interaction.user.id, "鍵・シャード受け取り");
-    await closeTicketChannel(interaction, targetUserId, "却下");
-    await interaction.editReply(`✅ <@${targetUserId}> の申請を却下しました。`);
-  } catch (err) {
-    logger.error({ err }, "Failed to reject key ticket");
-    await interaction.editReply("❌ 却下処理中にエラーが発生しました。");
-  }
-}
 
 // ── Media: approve ────────────────────────────────────────────────────────
 
@@ -583,7 +649,13 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
     });
 
     await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", "メディアランク 📺", false, expiresAt, interaction.user.id);
-    await closeTicketChannel(interaction, targetUserId, "承認");
+    await sendDM(targetMember, new EmbedBuilder()
+      .setColor(Colors.Green).setTitle("✅ メディアランク申請が承認されました")
+      .setDescription("あなたのメディアランク申請が承認されました！")
+      .addFields({ name: "⏰ 期限", value: expiresAt.toLocaleDateString("ja-JP"), inline: true })
+      .setTimestamp()
+    );
+    await closeTicketChannel(interaction.channel as TextChannel | null, targetUserId, "承認");
     await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を承認し、ロールを付与しました（1ヶ月）。`);
     logger.info({ targetUserId, mcid, expiresAt }, "Media ticket approved");
   } catch (err) {
@@ -592,28 +664,6 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
   }
 }
 
-// ── Media: reject ─────────────────────────────────────────────────────────
-
-async function handleMediaReject(interaction: ButtonInteraction, targetUserId: string) {
-  try {
-    await interaction.message.edit({
-      embeds: [
-        new EmbedBuilder().setColor(Colors.Red).setTitle("❌ メディアランク却下 — チケット終了")
-          .addFields(
-            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
-            { name: "却下スタッフ", value: `<@${interaction.user.id}>`, inline: true }
-          ).setTimestamp()
-      ],
-      components: [],
-    });
-    await sendRejectLog(interaction.guild as Guild, targetUserId, interaction.user.id, "メディアランク申請");
-    await closeTicketChannel(interaction, targetUserId, "却下");
-    await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を却下しました。`);
-  } catch (err) {
-    logger.error({ err }, "Failed to reject media ticket");
-    await interaction.editReply("❌ 却下処理中にエラーが発生しました。");
-  }
-}
 
 // ── 付与完了 button ──────────────────────────────────────────────────────────
 
@@ -705,7 +755,7 @@ async function sendKeyApprovalNotification(
   }
 }
 
-async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: string, type: string) {
+async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: string, type: string, reason: string) {
   try {
     const ch = await guild.channels.fetch(botConfig.ticketLogChannelId);
     if (!ch || !(ch instanceof TextChannel)) return;
@@ -715,7 +765,8 @@ async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: str
         new EmbedBuilder().setColor(Colors.Red).setTitle(`❌ チケット却下 — ${type}`)
           .addFields(
             { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
-            { name: "却下スタッフ", value: `<@${rejectedBy}>`, inline: true }
+            { name: "却下スタッフ", value: `<@${rejectedBy}>`, inline: true },
+            { name: "❌ 却下理由", value: reason, inline: false }
           ).setTimestamp()
       ],
     });
@@ -724,14 +775,21 @@ async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: str
   }
 }
 
-async function closeTicketChannel(interaction: ButtonInteraction, targetUserId: string, reason: string) {
-  const channel = interaction.channel;
-  if (!channel || !(channel instanceof TextChannel)) return;
+async function closeTicketChannel(channel: TextChannel | null, targetUserId: string, reason: string) {
+  if (!channel) return;
   try {
     await channel.send(`🔒 このチケットは **${reason}** により閉じられます。5秒後にチャンネルを削除します。`);
     setTimeout(() => { channel.delete(`チケット${reason}: ${targetUserId}`).catch(() => {}); }, 5000);
   } catch (err) {
     logger.error({ err }, "Failed to close ticket channel");
+  }
+}
+
+async function sendDM(member: GuildMember, embed: EmbedBuilder): Promise<void> {
+  try {
+    await member.send({ embeds: [embed] });
+  } catch {
+    // DMが無効化されている場合は無視
   }
 }
 
