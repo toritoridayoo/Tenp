@@ -4,6 +4,7 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
+  ChannelType,
 } from "discord.js";
 import { logger } from "../lib/logger.js";
 import { botConfig, validateBotConfig } from "./config.js";
@@ -12,12 +13,13 @@ import { startScheduler } from "./scheduler.js";
 
 const commands = [
   new SlashCommandBuilder()
-    .setName("ticket")
-    .setDescription("Boothの購入番号を送信してロール申請を行います")
-    .addStringOption((option) =>
+    .setName("purchase_send")
+    .setDescription("Booth購入申請パネルを指定チャンネルに送信します（スタッフ専用）")
+    .addChannelOption((option) =>
       option
-        .setName("purchase_id")
-        .setDescription("BoothのクリエイターIDの購入番号（数字）")
+        .setName("channel")
+        .setDescription("パネルを送信するテキストチャンネル")
+        .addChannelTypes(ChannelType.GuildText)
         .setRequired(true)
     )
     .toJSON(),
@@ -53,7 +55,7 @@ export async function startBot(): Promise<void> {
     intents: [GatewayIntentBits.Guilds],
   });
 
-  client.once("ready", async (readyClient) => {
+  client.once("clientReady", async (readyClient) => {
     logger.info({ tag: readyClient.user.tag }, "Discord bot ready");
     await registerCommands(token, readyClient.user.id);
     startScheduler(readyClient);
