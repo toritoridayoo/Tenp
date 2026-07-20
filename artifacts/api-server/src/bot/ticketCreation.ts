@@ -12,6 +12,7 @@ import {
 } from "discord.js";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
+import type { KeyItem } from "./pendingTickets.js";
 
 export type ProductType = "permanent" | "1month";
 
@@ -131,9 +132,7 @@ export async function createKeyTicketChannel(
   guild: Guild,
   user: User,
   mcid: string,
-  purchaseId: string,
-  keyType: string,
-  quantity: number
+  items: KeyItem[]
 ): Promise<string> {
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
@@ -154,6 +153,12 @@ export async function createKeyTicketChannel(
       .setStyle(ButtonStyle.Danger)
   );
 
+  const itemFields = items.map((it, i) => ({
+    name: `📦 アイテム ${i + 1}`,
+    value: `🔑 ${it.keyType} × ${it.quantity}個\n🧾 購入番号: \`${it.purchaseId}\``,
+    inline: false,
+  }));
+
   const embed = new EmbedBuilder()
     .setColor(Colors.Gold)
     .setTitle("🔑 鍵・シャード受け取りチケット")
@@ -163,9 +168,7 @@ export async function createKeyTicketChannel(
     .addFields(
       { name: "👤 申請者", value: `<@${user.id}> (${user.tag})`, inline: true },
       { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
-      { name: "🧾 購入番号", value: `\`${purchaseId}\``, inline: true },
-      { name: "🔑 種類", value: keyType, inline: true },
-      { name: "📦 個数", value: `${quantity}個`, inline: true }
+      ...itemFields
     )
     .setTimestamp()
     .setFooter({ text: `ユーザーID: ${user.id}` });
@@ -176,16 +179,20 @@ export async function createKeyTicketChannel(
     components: [row],
   });
 
+  const logItemFields = items.flatMap((it, i) => [
+    { name: `アイテム${i + 1} 種類`, value: it.keyType, inline: true },
+    { name: `アイテム${i + 1} 個数`, value: `${it.quantity}個`, inline: true },
+    { name: `アイテム${i + 1} 購入番号`, value: `\`${it.purchaseId}\``, inline: true },
+  ]);
+
   await sendTicketLog(guild, user, [
     { name: "📂 種別", value: "鍵・シャード受け取り", inline: true },
     { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
-    { name: "🧾 購入番号", value: `\`${purchaseId}\``, inline: true },
-    { name: "🔑 種類", value: keyType, inline: true },
-    { name: "📦 個数", value: `${quantity}個`, inline: true },
+    ...logItemFields,
     { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
   ]);
 
-  logger.info({ userId: user.id, mcid, purchaseId, keyType, quantity, channelId: ticketChannel.id }, "Key ticket created");
+  logger.info({ userId: user.id, mcid, items, channelId: ticketChannel.id }, "Key ticket created");
   return ticketChannel.id;
 }
 
