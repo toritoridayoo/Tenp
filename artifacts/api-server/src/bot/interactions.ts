@@ -10,6 +10,8 @@ import {
   Interaction,
   ModalBuilder,
   ModalSubmitInteraction,
+  StringSelectMenuBuilder,
+  StringSelectMenuInteraction,
   TextChannel,
   TextInputBuilder,
   TextInputStyle,
@@ -20,8 +22,21 @@ import { eq, and } from "drizzle-orm";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand } from "./panelCommand.js";
-import { createTicketChannel, PRODUCT_LABELS, type ProductType } from "./ticketCreation.js";
-import { setPending, getPending, clearPending } from "./pendingTickets.js";
+import {
+  createTicketChannel,
+  createKeyTicketChannel,
+  createMediaTicketChannel,
+  PRODUCT_LABELS,
+  KEY_QUANTITIES,
+  type ProductType,
+} from "./ticketCreation.js";
+import {
+  setRankPending, getRankPending, clearRankPending,
+  setKeyPending,  getKeyPending,  clearKeyPending, setKeyType,
+  setMediaPending, getMediaPending, clearMediaPending,
+} from "./pendingTickets.js";
+
+// ── Main router ───────────────────────────────────────────────────────────
 
 export async function handleInteraction(interaction: Interaction) {
   if (interaction.isChatInputCommand()) {
@@ -30,73 +45,64 @@ export async function handleInteraction(interaction: Interaction) {
     }
     return;
   }
-
   if (interaction.isButton()) {
     await handleButtonInteraction(interaction);
     return;
   }
-
   if (interaction.isModalSubmit()) {
     await handleModalSubmit(interaction);
     return;
   }
+  if (interaction.isStringSelectMenu()) {
+    await handleSelectMenu(interaction);
+    return;
+  }
 }
 
-// ── Button interactions ────────────────────────────────────────────────────
+// ── Button router ─────────────────────────────────────────────────────────
 
 async function handleButtonInteraction(interaction: ButtonInteraction) {
   const { customId } = interaction;
 
-  // Step 1: Panel button → open modal
+  // Panel buttons → open modals
   if (customId === "open_ticket") {
-    const modal = new ModalBuilder()
-      .setCustomId("ticket_modal")
-      .setTitle("📋 Booth購入ロール申請");
-
-    const mcidInput = new TextInputBuilder()
-      .setCustomId("mcid_input")
-      .setLabel("Minecraft ID（MCID）")
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder("例: Steve123")
-      .setMinLength(3)
-      .setMaxLength(16)
-      .setRequired(true);
-
-    const purchaseInput = new TextInputBuilder()
-      .setCustomId("purchase_id_input")
-      .setLabel("Boothの購入番号")
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder("例: 123456789")
-      .setMinLength(3)
-      .setMaxLength(50)
-      .setRequired(true);
-
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(mcidInput),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(purchaseInput)
-    );
-
-    await interaction.showModal(modal);
+    await interaction.showModal(buildRankModal());
+    return;
+  }
+  if (customId === "open_key_ticket") {
+    await interaction.showModal(buildKeyModal());
+    return;
+  }
+  if (customId === "open_media_ticket") {
+    await interaction.showModal(buildMediaModal());
     return;
   }
 
-  // Step 2: Product selection buttons
+  // Product selection (rank)
   if (customId.startsWith("product_")) {
     await handleProductSelection(interaction);
     return;
   }
 
-  // 付与完了 button
+  // Grant complete
   if (customId.startsWith("grant_complete_")) {
     await handleGrantComplete(interaction);
     return;
   }
 
-  // Approve / reject buttons
+  // Rank: approve / reject
   const approveMatch = customId.match(/^approve_(1month|permanent)_(\d+)$/);
-  const rejectMatch = customId.match(/^reject_(\d+)$/);
+  const rejectMatch  = customId.match(/^reject_(\d+)$/);
 
-  if (!approveMatch && !rejectMatch) return;
+  // Key: approve / reject
+  const keyApproveMatch = customId.match(/^key_approve_(\d+)$/);
+  const keyRejectMatch  = customId.match(/^key_reject_(\d+)$/);
+
+  // Media: approve / reject
+  const mediaApproveMatch = customId.match(/^media_approve_(\d+)$/);
+  const mediaRejectMatch  = customId.match(/^media_reject_(\d+)$/);
+
+  if (!approveMatch && !rejectMatch && !keyApproveMatch && !keyRejectMatch && !mediaApproveMatch && !mediaRejectMatch) return;
 
   await interaction.deferReply({ flags: 64 });
 
@@ -106,97 +112,98 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
     return;
   }
 
-  if (rejectMatch) {
-    await handleReject(interaction, rejectMatch[1]!);
-    return;
-  }
-
-  if (approveMatch) {
-    await handleApprove(
-      interaction,
-      approveMatch[2]!,
-      approveMatch[1] as "1month" | "permanent"
-    );
-  }
+  if (rejectMatch)      { await handleRankReject(interaction, rejectMatch[1]!); return; }
+  if (approveMatch)     { await handleRankApprove(interaction, approveMatch[2]!, approveMatch[1] as "1month" | "permanent"); return; }
+  if (keyRejectMatch)   { await handleKeyReject(interaction, keyRejectMatch[1]!); return; }
+  if (keyApproveMatch)  { await handleKeyApprove(interaction, keyApproveMatch[1]!); return; }
+  if (mediaRejectMatch) { await handleMediaReject(interaction, mediaRejectMatch[1]!); return; }
+  if (mediaApproveMatch){ await handleMediaApprove(interaction, mediaApproveMatch[1]!); return; }
 }
 
-// ── Step 2: Product selection ──────────────────────────────────────────────
+// ── Modal builders ────────────────────────────────────────────────────────
 
-async function handleProductSelection(interaction: ButtonInteraction) {
-  await interaction.deferReply({ flags: 64 });
-
-  const { customId, user, guild } = interaction;
-  const match = customId.match(/^product_(permanent|1month)_(\d+)$/);
-  if (!match || match[2] !== user.id) {
-    await interaction.editReply("❌ 無効な操作です。");
-    return;
-  }
-
-  const product = match[1] as ProductType;
-  const pending = getPending(user.id);
-  if (!pending) {
-    await interaction.editReply(
-      "❌ セッションが期限切れです。もう一度「チケットを作成」ボタンから始めてください。"
-    );
-    return;
-  }
-
-  if (!guild) {
-    await interaction.editReply("サーバー情報を取得できませんでした。");
-    return;
-  }
-
-  const existing = await db
-    .select()
-    .from(roleGrantsTable)
-    .where(
-      and(
-        eq(roleGrantsTable.guildId, guild.id),
-        eq(roleGrantsTable.userId, user.id),
-        eq(roleGrantsTable.removed, false)
-      )
+function buildRankModal(): ModalBuilder {
+  const modal = new ModalBuilder().setCustomId("rank_modal").setTitle("🎮 ランク受け取り申請");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("mcid_input").setLabel("Minecraft ID（MCID）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: Steve123")
+        .setMinLength(3).setMaxLength(16).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("purchase_id_input").setLabel("Boothの購入番号")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: 123456789")
+        .setMinLength(3).setMaxLength(50).setRequired(true)
     )
-    .limit(1);
-
-  if (existing.length > 0) {
-    clearPending(user.id);
-    await interaction.editReply("⚠️ すでに有効なロールが付与されているか、処理中のチケットがあります。");
-    return;
-  }
-
-  try {
-    const channelId = await createTicketChannel(guild, user, pending.mcid, pending.purchaseId, product);
-    clearPending(user.id);
-    await interaction.message.edit({ components: [] });
-    await interaction.editReply(
-      `✅ チケットを作成しました！スタッフが確認次第ロールが付与されます。\n<#${channelId}>`
-    );
-  } catch (err) {
-    logger.error({ err }, "Failed to create ticket channel");
-    await interaction.editReply("❌ チケットの作成中にエラーが発生しました。サーバー管理者にお問い合わせください。");
-  }
+  );
+  return modal;
 }
 
-// ── Modal submit (Step 1 → Step 2) ────────────────────────────────────────
+function buildKeyModal(): ModalBuilder {
+  const modal = new ModalBuilder().setCustomId("key_modal").setTitle("🔑 鍵・シャード受け取り申請");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("mcid_input").setLabel("Minecraft ID（MCID）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: Steve123")
+        .setMinLength(3).setMaxLength(16).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("purchase_id_input").setLabel("Boothの購入番号")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: 123456789")
+        .setMinLength(3).setMaxLength(50).setRequired(true)
+    )
+  );
+  return modal;
+}
+
+function buildMediaModal(): ModalBuilder {
+  const modal = new ModalBuilder().setCustomId("media_modal").setTitle("📺 メディアランク申請");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("mcid_input").setLabel("Minecraft ID（MCID）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: Steve123")
+        .setMinLength(3).setMaxLength(16).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("youtube_url_input").setLabel("対象動画のYouTube URL")
+        .setStyle(TextInputStyle.Short).setPlaceholder("https://www.youtube.com/watch?v=...")
+        .setMinLength(10).setMaxLength(200).setRequired(true)
+    )
+  );
+  return modal;
+}
+
+// ── Modal submit router ───────────────────────────────────────────────────
 
 async function handleModalSubmit(interaction: ModalSubmitInteraction) {
-  if (interaction.customId !== "ticket_modal") return;
+  if (interaction.customId === "rank_modal")  { await handleRankModalSubmit(interaction); return; }
+  if (interaction.customId === "key_modal")   { await handleKeyModalSubmit(interaction); return; }
+  if (interaction.customId === "media_modal") { await handleMediaModalSubmit(interaction); return; }
+}
 
+// ── Rank modal → product selection ────────────────────────────────────────
+
+async function handleRankModalSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: 64 });
 
-  const mcid = interaction.fields.getTextInputValue("mcid_input").trim();
+  const mcid       = interaction.fields.getTextInputValue("mcid_input").trim();
   const purchaseId = interaction.fields.getTextInputValue("purchase_id_input").trim();
-  const { user } = interaction;
 
-  setPending(user.id, { mcid, purchaseId });
+  setRankPending(interaction.user.id, { mcid, purchaseId });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`product_permanent_${user.id}`)
+      .setCustomId(`product_permanent_${interaction.user.id}`)
       .setLabel("🌟 Tori+ランク（永久版）")
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
-      .setCustomId(`product_1month_${user.id}`)
+      .setCustomId(`product_1month_${interaction.user.id}`)
       .setLabel("⏰ Tori+ランク（1ヶ月版）")
       .setStyle(ButtonStyle.Secondary)
   );
@@ -214,9 +221,176 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   await interaction.editReply({ embeds: [embed], components: [row] });
 }
 
-// ── Approve ────────────────────────────────────────────────────────────────
+// ── Rank product selection ────────────────────────────────────────────────
 
-async function handleApprove(
+async function handleProductSelection(interaction: ButtonInteraction) {
+  await interaction.deferReply({ flags: 64 });
+
+  const match = interaction.customId.match(/^product_(permanent|1month)_(\d+)$/);
+  if (!match || match[2] !== interaction.user.id) {
+    await interaction.editReply("❌ 無効な操作です。");
+    return;
+  }
+
+  const product = match[1] as ProductType;
+  const pending = getRankPending(interaction.user.id);
+  if (!pending) {
+    await interaction.editReply("❌ セッションが期限切れです。もう一度「ランク受け取り」ボタンから始めてください。");
+    return;
+  }
+  if (!interaction.guild) {
+    await interaction.editReply("サーバー情報を取得できませんでした。");
+    return;
+  }
+
+  const existing = await db.select().from(roleGrantsTable).where(
+    and(eq(roleGrantsTable.guildId, interaction.guild.id), eq(roleGrantsTable.userId, interaction.user.id), eq(roleGrantsTable.removed, false))
+  ).limit(1);
+
+  if (existing.length > 0) {
+    clearRankPending(interaction.user.id);
+    await interaction.editReply("⚠️ すでに有効なロールが付与されているか、処理中のチケットがあります。");
+    return;
+  }
+
+  try {
+    const channelId = await createTicketChannel(interaction.guild, interaction.user, pending.mcid, pending.purchaseId, product);
+    clearRankPending(interaction.user.id);
+    await interaction.message.edit({ components: [] });
+    await interaction.editReply(`✅ チケットを作成しました！スタッフが確認次第ロールが付与されます。\n<#${channelId}>`);
+  } catch (err) {
+    logger.error({ err }, "Failed to create rank ticket channel");
+    await interaction.editReply("❌ チケットの作成中にエラーが発生しました。");
+  }
+}
+
+// ── Key modal → key type select ───────────────────────────────────────────
+
+async function handleKeyModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+
+  const mcid       = interaction.fields.getTextInputValue("mcid_input").trim();
+  const purchaseId = interaction.fields.getTextInputValue("purchase_id_input").trim();
+
+  setKeyPending(interaction.user.id, { mcid, purchaseId });
+
+  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`key_type_sel_${interaction.user.id}`)
+      .setPlaceholder("受け取る鍵・シャードの種類を選択")
+      .addOptions(
+        Object.keys(KEY_QUANTITIES).map((k) => ({ label: k, value: k }))
+      )
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor(Colors.Gold)
+    .setTitle("🔑 受け取る種類を選択してください")
+    .addFields(
+      { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+      { name: "🧾 購入番号", value: `\`${purchaseId}\``, inline: true }
+    )
+    .setFooter({ text: "10分以内に選択してください" });
+
+  await interaction.editReply({ embeds: [embed], components: [row] });
+}
+
+// ── Key type selected → quantity select ───────────────────────────────────
+
+async function handleSelectMenu(interaction: StringSelectMenuInteraction) {
+  const { customId, user } = interaction;
+
+  if (customId.startsWith("key_type_sel_")) {
+    if (!customId.endsWith(`_${user.id}`)) {
+      await interaction.reply({ content: "❌ この操作はあなた向けではありません。", flags: 64 });
+      return;
+    }
+
+    const keyType   = interaction.values[0]!;
+    const quantities = KEY_QUANTITIES[keyType]!;
+
+    setKeyType(user.id, keyType);
+
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`key_qty_sel_${user.id}`)
+        .setPlaceholder(`${keyType} の個数を選択`)
+        .addOptions(quantities.map((q) => ({ label: `${q}個`, value: String(q) })))
+    );
+
+    await interaction.update({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.Gold)
+          .setTitle(`🔑 ${keyType} — 個数を選択してください`)
+          .setFooter({ text: "10分以内に選択してください" }),
+      ],
+      components: [row],
+    });
+    return;
+  }
+
+  if (customId.startsWith("key_qty_sel_")) {
+    if (!customId.endsWith(`_${user.id}`)) {
+      await interaction.reply({ content: "❌ この操作はあなた向けではありません。", flags: 64 });
+      return;
+    }
+
+    const quantity = parseInt(interaction.values[0]!, 10);
+    const pending  = getKeyPending(user.id);
+
+    if (!pending || !pending.keyType) {
+      await interaction.update({ content: "❌ セッションが期限切れです。もう一度始めてください。", embeds: [], components: [] });
+      return;
+    }
+    if (!interaction.guild) {
+      await interaction.update({ content: "サーバー情報を取得できませんでした。", embeds: [], components: [] });
+      return;
+    }
+
+    try {
+      const channelId = await createKeyTicketChannel(
+        interaction.guild, user, pending.mcid, pending.purchaseId, pending.keyType, quantity
+      );
+      clearKeyPending(user.id);
+      await interaction.update({
+        content: `✅ チケットを作成しました！スタッフが確認次第対応します。\n<#${channelId}>`,
+        embeds: [],
+        components: [],
+      });
+    } catch (err) {
+      logger.error({ err }, "Failed to create key ticket channel");
+      await interaction.update({ content: "❌ チケットの作成中にエラーが発生しました。", embeds: [], components: [] });
+    }
+    return;
+  }
+}
+
+// ── Media modal → create ticket ───────────────────────────────────────────
+
+async function handleMediaModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+
+  const mcid       = interaction.fields.getTextInputValue("mcid_input").trim();
+  const youtubeUrl = interaction.fields.getTextInputValue("youtube_url_input").trim();
+
+  if (!interaction.guild) {
+    await interaction.editReply("サーバー情報を取得できませんでした。");
+    return;
+  }
+
+  try {
+    const channelId = await createMediaTicketChannel(interaction.guild, interaction.user, mcid, youtubeUrl);
+    await interaction.editReply(`✅ メディアランク申請チケットを作成しました！\n<#${channelId}>\nアナリティクス画面のスクリーンショットをチケット内に貼り付けてください。`);
+  } catch (err) {
+    logger.error({ err }, "Failed to create media ticket channel");
+    await interaction.editReply("❌ チケットの作成中にエラーが発生しました。");
+  }
+}
+
+// ── Rank: approve ─────────────────────────────────────────────────────────
+
+async function handleRankApprove(
   interaction: ButtonInteraction,
   targetUserId: string,
   durationType: "1month" | "permanent"
@@ -227,93 +401,182 @@ async function handleApprove(
   try {
     targetMember = await guild.members.fetch(targetUserId);
   } catch {
-    await interaction.editReply(`❌ ユーザー <@${targetUserId}> がサーバーに見つかりません。退出した可能性があります。`);
+    await interaction.editReply(`❌ ユーザー <@${targetUserId}> がサーバーに見つかりません。`);
     return;
   }
 
   try {
     await targetMember.roles.add(botConfig.grantRoleId, "Booth購入承認");
 
-    const permanent = durationType === "permanent";
-    const expiresAt = permanent ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const permanent  = durationType === "permanent";
+    const expiresAt  = permanent ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const product: ProductType = permanent ? "permanent" : "1month";
-
-    const purchaseId = extractFieldFromEmbed(interaction, "購入番号");
-    const mcid = extractFieldFromEmbed(interaction, "Minecraft ID");
     const productLabel = PRODUCT_LABELS[product];
 
+    const mcid       = extractField(interaction, "Minecraft ID");
+    const purchaseId = extractField(interaction, "購入番号");
+
     await db.insert(roleGrantsTable).values({
-      guildId: guild.id,
-      userId: targetUserId,
-      roleId: botConfig.grantRoleId,
-      purchaseId: purchaseId ?? "unknown",
-      permanent,
-      expiresAt,
-      grantedBy: interaction.user.id,
-      ticketChannelId: interaction.channelId,
-      removed: false,
+      guildId: guild.id, userId: targetUserId, roleId: botConfig.grantRoleId,
+      purchaseId: purchaseId ?? "unknown", permanent, expiresAt,
+      grantedBy: interaction.user.id, ticketChannelId: interaction.channelId, removed: false,
     });
 
-    // 1. Update ticket embed to "承認済み" and remove buttons
     const approvedEmbed = new EmbedBuilder()
-      .setColor(Colors.Green)
-      .setTitle("✅ 承認済み — チケット終了")
+      .setColor(Colors.Green).setTitle("✅ 承認済み — チケット終了")
       .addFields(
         { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
         { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``, inline: true },
         { name: "🧾 購入番号", value: `\`${purchaseId ?? "不明"}\``, inline: true },
         { name: "📦 商品", value: productLabel, inline: true },
         { name: "承認スタッフ", value: `<@${interaction.user.id}>`, inline: true },
-        {
-          name: "付与期間",
-          value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`,
-          inline: true,
-        }
-      )
-      .setTimestamp();
+        { name: "付与期間", value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true }
+      ).setTimestamp();
 
     await interaction.message.edit({ embeds: [approvedEmbed], components: [] });
-
-    // 2. Send to approval channel with 付与完了 button
     await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id);
-
-    // 3. Close (delete) the ticket channel after 5 seconds
     await closeTicketChannel(interaction, targetUserId, "承認");
-
     await interaction.editReply(`✅ <@${targetUserId}> を承認しました。チケットを閉じます。`);
-
-    logger.info({ targetUserId, durationType, mcid, grantedBy: interaction.user.id }, "Role granted");
+    logger.info({ targetUserId, durationType, mcid, grantedBy: interaction.user.id }, "Rank role granted");
   } catch (err) {
-    logger.error({ err }, "Failed to grant role");
-    await interaction.editReply("❌ ロールの付与中にエラーが発生しました。ボットのロール順位を確認してください。");
+    logger.error({ err }, "Failed to grant rank role");
+    await interaction.editReply("❌ ロールの付与中にエラーが発生しました。");
   }
 }
 
-// ── Reject ─────────────────────────────────────────────────────────────────
+// ── Rank: reject ──────────────────────────────────────────────────────────
 
-async function handleReject(interaction: ButtonInteraction, targetUserId: string) {
+async function handleRankReject(interaction: ButtonInteraction, targetUserId: string) {
   try {
-    const rejectedEmbed = new EmbedBuilder()
-      .setColor(Colors.Red)
-      .setTitle("❌ 却下 — チケット終了")
-      .addFields(
-        { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
-        { name: "却下スタッフ", value: `<@${interaction.user.id}>`, inline: true }
-      )
-      .setTimestamp();
+    await interaction.message.edit({
+      embeds: [
+        new EmbedBuilder().setColor(Colors.Red).setTitle("❌ 却下 — チケット終了")
+          .addFields(
+            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
+            { name: "却下スタッフ", value: `<@${interaction.user.id}>`, inline: true }
+          ).setTimestamp()
+      ],
+      components: [],
+    });
 
-    await interaction.message.edit({ embeds: [rejectedEmbed], components: [] });
-
-    // Send reject log
-    await sendRejectLog(interaction.guild as Guild, targetUserId, interaction.user.id);
-
-    // Close ticket channel after 5 seconds
+    await sendRejectLog(interaction.guild as Guild, targetUserId, interaction.user.id, "ランク申請");
     await closeTicketChannel(interaction, targetUserId, "却下");
-
-    await interaction.editReply(`✅ <@${targetUserId}> の申請を却下しました。チケットを閉じます。`);
-    logger.info({ targetUserId, rejectedBy: interaction.user.id }, "Ticket rejected");
+    await interaction.editReply(`✅ <@${targetUserId}> の申請を却下しました。`);
   } catch (err) {
-    logger.error({ err }, "Failed to reject ticket");
+    logger.error({ err }, "Failed to reject rank ticket");
+    await interaction.editReply("❌ 却下処理中にエラーが発生しました。");
+  }
+}
+
+// ── Key: approve ──────────────────────────────────────────────────────────
+
+async function handleKeyApprove(interaction: ButtonInteraction, targetUserId: string) {
+  try {
+    const mcid     = extractField(interaction, "Minecraft ID");
+    const keyType  = extractField(interaction, "種類");
+    const quantity = extractField(interaction, "個数");
+
+    await interaction.message.edit({
+      embeds: [
+        new EmbedBuilder().setColor(Colors.Green).setTitle("✅ 付与済み — チケット終了")
+          .addFields(
+            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
+            { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``, inline: true },
+            { name: "🔑 種類", value: keyType ?? "不明", inline: true },
+            { name: "📦 個数", value: quantity ?? "不明", inline: true },
+            { name: "対応スタッフ", value: `<@${interaction.user.id}>`, inline: true }
+          ).setTimestamp()
+      ],
+      components: [],
+    });
+
+    await sendKeyApprovalNotification(interaction.guild as Guild, targetUserId, mcid ?? "不明", keyType ?? "不明", quantity ?? "不明", interaction.user.id);
+    await closeTicketChannel(interaction, targetUserId, "付与済み");
+    await interaction.editReply(`✅ <@${targetUserId}> の鍵・シャード付与を確認しました。チケットを閉じます。`);
+    logger.info({ targetUserId, keyType, quantity }, "Key ticket approved");
+  } catch (err) {
+    logger.error({ err }, "Failed to approve key ticket");
+    await interaction.editReply("❌ 処理中にエラーが発生しました。");
+  }
+}
+
+// ── Key: reject ───────────────────────────────────────────────────────────
+
+async function handleKeyReject(interaction: ButtonInteraction, targetUserId: string) {
+  try {
+    await interaction.message.edit({
+      embeds: [
+        new EmbedBuilder().setColor(Colors.Red).setTitle("❌ 却下 — チケット終了")
+          .addFields(
+            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
+            { name: "却下スタッフ", value: `<@${interaction.user.id}>`, inline: true }
+          ).setTimestamp()
+      ],
+      components: [],
+    });
+
+    await sendRejectLog(interaction.guild as Guild, targetUserId, interaction.user.id, "鍵・シャード受け取り");
+    await closeTicketChannel(interaction, targetUserId, "却下");
+    await interaction.editReply(`✅ <@${targetUserId}> の申請を却下しました。`);
+  } catch (err) {
+    logger.error({ err }, "Failed to reject key ticket");
+    await interaction.editReply("❌ 却下処理中にエラーが発生しました。");
+  }
+}
+
+// ── Media: approve ────────────────────────────────────────────────────────
+
+async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: string) {
+  try {
+    const mcid       = extractField(interaction, "Minecraft ID");
+    const youtubeUrl = extractField(interaction, "YouTube URL");
+
+    await interaction.message.edit({
+      embeds: [
+        new EmbedBuilder().setColor(Colors.Green).setTitle("✅ メディアランク承認 — チケット終了")
+          .addFields(
+            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
+            { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``, inline: true },
+            { name: "承認スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "▶️ YouTube URL", value: youtubeUrl ?? "不明", inline: false }
+          ).setTimestamp()
+      ],
+      components: [],
+    });
+
+    await sendApprovalNotification(
+      interaction.guild as Guild, targetUserId, mcid ?? "不明",
+      "メディアランク 📺", true, null, interaction.user.id
+    );
+    await closeTicketChannel(interaction, targetUserId, "承認");
+    await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を承認しました。`);
+    logger.info({ targetUserId, mcid }, "Media ticket approved");
+  } catch (err) {
+    logger.error({ err }, "Failed to approve media ticket");
+    await interaction.editReply("❌ 処理中にエラーが発生しました。");
+  }
+}
+
+// ── Media: reject ─────────────────────────────────────────────────────────
+
+async function handleMediaReject(interaction: ButtonInteraction, targetUserId: string) {
+  try {
+    await interaction.message.edit({
+      embeds: [
+        new EmbedBuilder().setColor(Colors.Red).setTitle("❌ メディアランク却下 — チケット終了")
+          .addFields(
+            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
+            { name: "却下スタッフ", value: `<@${interaction.user.id}>`, inline: true }
+          ).setTimestamp()
+      ],
+      components: [],
+    });
+
+    await sendRejectLog(interaction.guild as Guild, targetUserId, interaction.user.id, "メディアランク申請");
+    await closeTicketChannel(interaction, targetUserId, "却下");
+    await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を却下しました。`);
+  } catch (err) {
+    logger.error({ err }, "Failed to reject media ticket");
     await interaction.editReply("❌ 却下処理中にエラーが発生しました。");
   }
 }
@@ -330,12 +593,13 @@ async function handleGrantComplete(interaction: ButtonInteraction) {
   }
 
   try {
+    const originalEmbed = interaction.message.embeds[0];
     const completedEmbed = new EmbedBuilder()
       .setColor(Colors.DarkGreen)
       .setTitle("🎮 ゲーム内付与完了")
       .setDescription("ゲーム内でのランク付与が完了しました。")
       .addFields(
-        ...interaction.message.embeds[0]!.fields,
+        ...(originalEmbed?.fields ?? []),
         { name: "✅ 完了スタッフ", value: `<@${interaction.user.id}>`, inline: true },
         { name: "完了時刻", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
       )
@@ -343,7 +607,6 @@ async function handleGrantComplete(interaction: ButtonInteraction) {
 
     await interaction.message.edit({ embeds: [completedEmbed], components: [] });
     await interaction.editReply("✅ 付与完了としてマークしました。");
-
     logger.info({ completedBy: interaction.user.id }, "Grant marked complete");
   } catch (err) {
     logger.error({ err }, "Failed to mark grant complete");
@@ -351,7 +614,7 @@ async function handleGrantComplete(interaction: ButtonInteraction) {
   }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// ── Shared helpers ────────────────────────────────────────────────────────
 
 async function sendApprovalNotification(
   guild: Guild,
@@ -361,10 +624,10 @@ async function sendApprovalNotification(
   permanent: boolean,
   expiresAt: Date | null,
   approvedBy: string
-): Promise<void> {
+) {
   try {
-    const approvalChannel = await guild.channels.fetch(botConfig.approvalChannelId);
-    if (!approvalChannel || !(approvalChannel instanceof TextChannel)) return;
+    const ch = await guild.channels.fetch(botConfig.approvalChannelId);
+    if (!ch || !(ch instanceof TextChannel)) return;
 
     const embed = new EmbedBuilder()
       .setColor(Colors.Gold)
@@ -374,16 +637,10 @@ async function sendApprovalNotification(
         { name: "👤 プレイヤー", value: `<@${targetUserId}>`, inline: true },
         { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
         { name: "📦 商品", value: productLabel, inline: true },
-        {
-          name: "⏰ 付与期間",
-          value: permanent ? "永久" : `1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`,
-          inline: true,
-        },
+        { name: "⏰ 付与期間", value: permanent ? "永久" : `1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true },
         { name: "承認スタッフ", value: `<@${approvedBy}>`, inline: true }
-      )
-      .setTimestamp();
+      ).setTimestamp();
 
-    // Encode userId in the customId for reference
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`grant_complete_${targetUserId}`)
@@ -391,27 +648,63 @@ async function sendApprovalNotification(
         .setStyle(ButtonStyle.Success)
     );
 
-    await approvalChannel.send({ embeds: [embed], components: [row] });
+    await ch.send({ embeds: [embed], components: [row] });
   } catch (err) {
     logger.error({ err }, "Failed to send approval notification");
   }
 }
 
-async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: string): Promise<void> {
+async function sendKeyApprovalNotification(
+  guild: Guild,
+  targetUserId: string,
+  mcid: string,
+  keyType: string,
+  quantity: string,
+  approvedBy: string
+) {
   try {
-    const logChannel = await guild.channels.fetch(botConfig.ticketLogChannelId);
-    if (!logChannel || !(logChannel instanceof TextChannel)) return;
+    const ch = await guild.channels.fetch(botConfig.approvalChannelId);
+    if (!ch || !(ch instanceof TextChannel)) return;
+
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Gold)
+      .setTitle("🔑 鍵・シャード付与 — ゲーム内反映確認")
+      .setDescription(`<@${targetUserId}> への鍵・シャード付与が完了しました。ゲーム内で付与後、下のボタンを押してください。`)
+      .addFields(
+        { name: "👤 プレイヤー", value: `<@${targetUserId}>`, inline: true },
+        { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+        { name: "🔑 種類", value: keyType, inline: true },
+        { name: "📦 個数", value: quantity, inline: true },
+        { name: "対応スタッフ", value: `<@${approvedBy}>`, inline: true }
+      ).setTimestamp();
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`grant_complete_${targetUserId}`)
+        .setLabel("✅ ゲーム内付与完了")
+        .setStyle(ButtonStyle.Success)
+    );
+
+    await ch.send({ embeds: [embed], components: [row] });
+  } catch (err) {
+    logger.error({ err }, "Failed to send key approval notification");
+  }
+}
+
+async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: string, type: string) {
+  try {
+    const ch = await guild.channels.fetch(botConfig.ticketLogChannelId);
+    if (!ch || !(ch instanceof TextChannel)) return;
 
     const embed = new EmbedBuilder()
       .setColor(Colors.Red)
-      .setTitle("❌ チケット却下")
+      .setTitle(`❌ チケット却下 — ${type}`)
       .addFields(
         { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
         { name: "却下スタッフ", value: `<@${rejectedBy}>`, inline: true }
-      )
-      .setTimestamp();
+      ).setTimestamp();
 
-    await logChannel.send({ embeds: [embed] });
+    await ch.send({ embeds: [embed] });
   } catch (err) {
     logger.error({ err }, "Failed to send reject log");
   }
@@ -421,28 +714,22 @@ async function closeTicketChannel(
   interaction: ButtonInteraction,
   targetUserId: string,
   reason: string
-): Promise<void> {
+) {
   const channel = interaction.channel;
   if (!channel || !(channel instanceof TextChannel)) return;
-
   try {
-    await channel.send(`🔒 このチケットは**${reason}**により閉じられます。5秒後にチャンネルを削除します。`);
-    setTimeout(() => {
-      channel.delete(`チケット${reason}: ${targetUserId}`).catch(() => {});
-    }, 5000);
+    await channel.send(`🔒 このチケットは **${reason}** により閉じられます。5秒後にチャンネルを削除します。`);
+    setTimeout(() => { channel.delete(`チケット${reason}: ${targetUserId}`).catch(() => {}); }, 5000);
   } catch (err) {
     logger.error({ err }, "Failed to close ticket channel");
   }
 }
 
-function extractFieldFromEmbed(interaction: ButtonInteraction, fieldNameFragment: string): string | null {
+function extractField(interaction: ButtonInteraction, fieldNameFragment: string): string | null {
   try {
     const embed = interaction.message.embeds[0];
     if (!embed) return null;
     const field = embed.fields.find((f) => f.name.includes(fieldNameFragment));
-    if (!field) return null;
-    return field.value.replace(/`/g, "").trim();
-  } catch {
-    return null;
-  }
+    return field ? field.value.replace(/`/g, "").trim() : null;
+  } catch { return null; }
 }

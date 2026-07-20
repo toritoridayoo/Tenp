@@ -25,23 +25,33 @@ export async function handlePurchaseSendCommand(
 
     const embed = new EmbedBuilder()
       .setColor(Colors.Blurple)
-      .setTitle("🛒 Booth購入ロール申請")
+      .setTitle("🛒 Booth購入申請パネル")
       .setDescription(
-        "Boothで商品を購入した方はこちらからロール申請を行ってください。\n\n" +
-          "**手順**\n" +
-          "1. 下の「📩 チケットを作成」ボタンを押す\n" +
-          "2. Boothの購入番号を入力して送信\n" +
-          "3. スタッフが確認後、ロールを付与します\n\n" +
+        "Boothで商品を購入した方は下のボタンから申請を行ってください。\n\n" +
+          "🎮 **ランク受け取り**\n" +
+          "　Tori+ランク（永久版 / 1ヶ月版）の付与申請\n\n" +
+          "🔑 **鍵・シャード受け取り**\n" +
+          "　各種キー・シャードの受け取り申請\n\n" +
+          "📺 **メディアランク申請**\n" +
+          "　YouTubeなどのメディア活動によるランク申請\n\n" +
           "> 購入番号はBoothの注文確認メールまたはマイページから確認できます。"
       )
-      .setFooter({ text: "スタッフが確認次第、ロールが付与されます" })
+      .setFooter({ text: "スタッフが確認次第、対応します" })
       .setTimestamp();
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId("open_ticket")
-        .setLabel("📩 チケットを作成")
-        .setStyle(ButtonStyle.Primary)
+        .setLabel("🎮 ランク受け取り")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("open_key_ticket")
+        .setLabel("🔑 鍵・シャード受け取り")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("open_media_ticket")
+        .setLabel("📺 メディアランク申請")
+        .setStyle(ButtonStyle.Success)
     );
 
     await channel.send({ embeds: [embed], components: [row] });
