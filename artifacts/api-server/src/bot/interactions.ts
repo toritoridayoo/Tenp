@@ -490,7 +490,6 @@ async function handleKeyApprove(interaction: ButtonInteraction, targetUserId: st
       components: [],
     });
 
-    await sendKeyApprovalNotification(interaction.guild as Guild, targetUserId, mcid ?? "不明", keyType ?? "不明", quantity ?? "不明", interaction.user.id);
     await closeTicketChannel(interaction, targetUserId, "付与済み");
     await interaction.editReply(`✅ <@${targetUserId}> の鍵・シャード付与を確認しました。チケットを閉じます。`);
     logger.info({ targetUserId, keyType, quantity }, "Key ticket approved");
@@ -527,9 +526,36 @@ async function handleKeyReject(interaction: ButtonInteraction, targetUserId: str
 // ── Media: approve ────────────────────────────────────────────────────────
 
 async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: string) {
+  const guild = interaction.guild as Guild;
+
+  let targetMember: GuildMember;
+  try {
+    targetMember = await guild.members.fetch(targetUserId);
+  } catch {
+    await interaction.editReply(`❌ ユーザー <@${targetUserId}> がサーバーに見つかりません。`);
+    return;
+  }
+
   try {
     const mcid       = extractField(interaction, "Minecraft ID");
     const youtubeUrl = extractField(interaction, "YouTube URL");
+
+    // Grant media role
+    await targetMember.roles.add(botConfig.mediaGrantRoleId, "メディアランク承認");
+
+    // Store in DB with 1-month expiry
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    await db.insert(roleGrantsTable).values({
+      guildId: guild.id,
+      userId: targetUserId,
+      roleId: botConfig.mediaGrantRoleId,
+      purchaseId: "media",
+      permanent: false,
+      expiresAt,
+      grantedBy: interaction.user.id,
+      ticketChannelId: interaction.channelId,
+      removed: false,
+    });
 
     await interaction.message.edit({
       embeds: [
@@ -538,6 +564,7 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
             { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
             { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``, inline: true },
             { name: "承認スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "⏰ 期限", value: expiresAt.toLocaleDateString("ja-JP"), inline: true },
             { name: "▶️ YouTube URL", value: youtubeUrl ?? "不明", inline: false }
           ).setTimestamp()
       ],
@@ -545,12 +572,12 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
     });
 
     await sendApprovalNotification(
-      interaction.guild as Guild, targetUserId, mcid ?? "不明",
-      "メディアランク 📺", true, null, interaction.user.id
+      guild, targetUserId, mcid ?? "不明",
+      "メディアランク 📺", false, expiresAt, interaction.user.id
     );
     await closeTicketChannel(interaction, targetUserId, "承認");
-    await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を承認しました。`);
-    logger.info({ targetUserId, mcid }, "Media ticket approved");
+    await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を承認し、ロールを付与しました（1ヶ月）。`);
+    logger.info({ targetUserId, mcid, expiresAt }, "Media ticket approved");
   } catch (err) {
     logger.error({ err }, "Failed to approve media ticket");
     await interaction.editReply("❌ 処理中にエラーが発生しました。");
