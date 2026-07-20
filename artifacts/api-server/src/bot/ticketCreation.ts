@@ -68,9 +68,9 @@ export async function createTicketChannel(
   purchaseId: string,
   product: ProductType
 ): Promise<string> {
-  const safeName = user.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 16);
+  const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `rank-${safeName}-${Date.now().toString(36)}`,
+    name: `🔔ランク受け取り-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
@@ -135,9 +135,9 @@ export async function createKeyTicketChannel(
   keyType: string,
   quantity: number
 ): Promise<string> {
-  const safeName = user.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 16);
+  const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `key-${safeName}-${Date.now().toString(36)}`,
+    name: `🔔鍵・シャード受け取り-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
@@ -197,9 +197,9 @@ export async function createMediaTicketChannel(
   mcid: string,
   youtubeUrl: string
 ): Promise<string> {
-  const safeName = user.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 16);
+  const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `media-${safeName}-${Date.now().toString(36)}`,
+    name: `🎥メディアランク申請-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),

@@ -47,11 +47,11 @@ export async function handlePurchaseSendCommand(
       new ButtonBuilder()
         .setCustomId("open_key_ticket")
         .setLabel("🔑 鍵・シャード受け取り")
-        .setStyle(ButtonStyle.Secondary),
+        .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId("open_media_ticket")
         .setLabel("📺 メディアランク申請")
-        .setStyle(ButtonStyle.Success)
+        .setStyle(ButtonStyle.Danger)
     );
 
     await channel.send({ embeds: [embed], components: [row] });
