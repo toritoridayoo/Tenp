@@ -1,6 +1,8 @@
 import {
   ActionRowBuilder,
+  ButtonBuilder,
   ButtonInteraction,
+  ButtonStyle,
   Colors,
   EmbedBuilder,
   Guild,
@@ -10,7 +12,6 @@ import {
   ModalSubmitInteraction,
   TextInputBuilder,
   TextInputStyle,
-  ThreadChannel,
 } from "discord.js";
 import { db } from "@workspace/db";
 import { roleGrantsTable } from "@workspace/db";
@@ -18,7 +19,8 @@ import { eq, and } from "drizzle-orm";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand } from "./panelCommand.js";
-import { createTicketChannel } from "./ticketCreation.js";
+import { createTicketChannel, type ProductType } from "./ticketCreation.js";
+import { setPending, getPending, clearPending } from "./pendingTickets.js";
 
 export async function handleInteraction(interaction: Interaction) {
   if (interaction.isChatInputCommand()) {
@@ -44,15 +46,24 @@ export async function handleInteraction(interaction: Interaction) {
 async function handleButtonInteraction(interaction: ButtonInteraction) {
   const { customId } = interaction;
 
-  // Panel button: open ticket creation modal
+  // Step 1: Panel button → open modal
   if (customId === "open_ticket") {
     const modal = new ModalBuilder()
       .setCustomId("ticket_modal")
-      .setTitle("📋 Booth購入番号の入力");
+      .setTitle("📋 Booth購入ロール申請");
+
+    const mcidInput = new TextInputBuilder()
+      .setCustomId("mcid_input")
+      .setLabel("Minecraft ID（MCID）")
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder("例: Steve123")
+      .setMinLength(3)
+      .setMaxLength(16)
+      .setRequired(true);
 
     const purchaseInput = new TextInputBuilder()
       .setCustomId("purchase_id_input")
-      .setLabel("Boothの購入番号を入力してください")
+      .setLabel("Boothの購入番号")
       .setStyle(TextInputStyle.Short)
       .setPlaceholder("例: 123456789")
       .setMinLength(3)
@@ -60,10 +71,17 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       .setRequired(true);
 
     modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(mcidInput),
       new ActionRowBuilder<TextInputBuilder>().addComponents(purchaseInput)
     );
 
     await interaction.showModal(modal);
+    return;
+  }
+
+  // Step 2: Product selection buttons
+  if (customId.startsWith("product_")) {
+    await handleProductSelection(interaction);
     return;
   }
 
@@ -97,25 +115,36 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   }
 }
 
-// ── Modal submit ───────────────────────────────────────────────────────────
+// ── Step 2: Product selection ──────────────────────────────────────────────
 
-async function handleModalSubmit(interaction: ModalSubmitInteraction) {
-  if (interaction.customId !== "ticket_modal") return;
-
+async function handleProductSelection(interaction: ButtonInteraction) {
   await interaction.deferReply({ flags: 64 });
 
-  const purchaseId = interaction.fields
-    .getTextInputValue("purchase_id_input")
-    .trim();
-  const user = interaction.user;
-  const guild = interaction.guild;
+  const { customId, user, guild } = interaction;
+
+  // customId format: product_permanent_<userId> or product_1month_<userId>
+  const match = customId.match(/^product_(permanent|1month)_(\d+)$/);
+  if (!match || match[2] !== user.id) {
+    await interaction.editReply("❌ 無効な操作です。");
+    return;
+  }
+
+  const product = match[1] as ProductType;
+
+  const pending = getPending(user.id);
+  if (!pending) {
+    await interaction.editReply(
+      "❌ セッションが期限切れです。もう一度「チケットを作成」ボタンから始めてください。"
+    );
+    return;
+  }
 
   if (!guild) {
     await interaction.editReply("サーバー情報を取得できませんでした。");
     return;
   }
 
-  // Check for duplicate open ticket (same user, not yet removed)
+  // Check for existing active grant
   const existing = await db
     .select()
     .from(roleGrantsTable)
@@ -129,6 +158,7 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
     .limit(1);
 
   if (existing.length > 0) {
+    clearPending(user.id);
     await interaction.editReply(
       "⚠️ すでに有効なロールが付与されているか、処理中のチケットがあります。"
     );
@@ -136,16 +166,66 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   }
 
   try {
-    const channelId = await createTicketChannel(guild, user, purchaseId);
+    const channelId = await createTicketChannel(
+      guild,
+      user,
+      pending.mcid,
+      pending.purchaseId,
+      product
+    );
+    clearPending(user.id);
+
+    // Disable the selection buttons on the product choice message
+    await interaction.message.edit({ components: [] });
+
     await interaction.editReply(
       `✅ チケットを作成しました！スタッフが確認次第ロールが付与されます。\n<#${channelId}>`
     );
   } catch (err) {
     logger.error({ err }, "Failed to create ticket channel");
     await interaction.editReply(
-      "❌ チケットの作成中にエラーが発生しました。カテゴリーの権限を確認してください。"
+      "❌ チケットの作成中にエラーが発生しました。サーバー管理者にお問い合わせください。"
     );
   }
+}
+
+// ── Modal submit (Step 1 → Step 2) ────────────────────────────────────────
+
+async function handleModalSubmit(interaction: ModalSubmitInteraction) {
+  if (interaction.customId !== "ticket_modal") return;
+
+  await interaction.deferReply({ flags: 64 });
+
+  const mcid = interaction.fields.getTextInputValue("mcid_input").trim();
+  const purchaseId = interaction.fields.getTextInputValue("purchase_id_input").trim();
+  const { user } = interaction;
+
+  // Save to in-memory pending store
+  setPending(user.id, { mcid, purchaseId });
+
+  // Show product selection buttons
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`product_permanent_${user.id}`)
+      .setLabel("🌟 Tori+ランク（永久版）")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`product_1month_${user.id}`)
+      .setLabel("⏰ Tori+ランク（1ヶ月版）")
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor(Colors.Blurple)
+    .setTitle("📦 申請する商品を選択してください")
+    .addFields(
+      { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+      { name: "🧾 購入番号", value: `\`${purchaseId}\``, inline: true }
+    )
+    .setDescription("Boothで購入した商品の種類を選んでください。")
+    .setFooter({ text: "10分以内に選択してください" });
+
+  await interaction.editReply({ embeds: [embed], components: [row] });
 }
 
 // ── Approve ────────────────────────────────────────────────────────────────
@@ -175,7 +255,8 @@ async function handleApprove(
       ? null
       : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-    const purchaseId = extractPurchaseIdFromEmbed(interaction);
+    const purchaseId = extractFieldFromEmbed(interaction, "購入番号");
+    const mcid = extractFieldFromEmbed(interaction, "Minecraft ID");
 
     await db.insert(roleGrantsTable).values({
       guildId: guild.id,
@@ -190,16 +271,17 @@ async function handleApprove(
     });
 
     const durationText = permanent
-      ? "🌟 **永久**"
-      : `⏰ **1ヶ月**（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`;
+      ? "🌟 永久版"
+      : `⏰ 1ヶ月版（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`;
 
     const embed = new EmbedBuilder()
       .setColor(Colors.Green)
       .setTitle("✅ 承認済み")
-      .setDescription(
-        `<@${targetUserId}> のロール申請が承認されました。\n付与期間: ${durationText}`
-      )
+      .setDescription(`<@${targetUserId}> のロール申請が承認されました。`)
       .addFields(
+        { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``, inline: true },
+        { name: "🧾 購入番号", value: `\`${purchaseId ?? "不明"}\``, inline: true },
+        { name: "付与期間", value: durationText, inline: false },
         { name: "承認スタッフ", value: `<@${interaction.user.id}>`, inline: true },
         { name: "付与ロール", value: `<@&${botConfig.grantRoleId}>`, inline: true }
       )
@@ -207,24 +289,23 @@ async function handleApprove(
 
     await interaction.message.edit({ embeds: [embed], components: [] });
 
-    if (interaction.channel instanceof ThreadChannel || interaction.channel) {
-      try {
+    // Notify in the ticket channel
+    try {
+      if (interaction.channel && "send" in interaction.channel) {
         await (interaction.channel as { send: (msg: string) => Promise<unknown> }).send(
           `✅ <@${targetUserId}> のロール申請が承認されました！` +
             (permanent
               ? ""
-              : `\n⏰ 期限: ${expiresAt!.toLocaleDateString("ja-JP")}`)
+              : `\n⏰ 期限: ${expiresAt!.toLocaleDateString("ja-JP")} に自動削除されます。`)
         );
-      } catch {
-        // channel send failure is non-fatal
       }
-    }
+    } catch { /* non-fatal */ }
 
     await interaction.editReply(
-      `✅ <@${targetUserId}> にロールを付与しました（${permanent ? "永久" : "1ヶ月"}）`
+      `✅ <@${targetUserId}> にロールを付与しました（${permanent ? "永久版" : "1ヶ月版"}）`
     );
 
-    logger.info({ targetUserId, durationType, grantedBy: interaction.user.id }, "Role granted");
+    logger.info({ targetUserId, durationType, mcid, grantedBy: interaction.user.id }, "Role granted");
   } catch (err) {
     logger.error({ err }, "Failed to grant role");
     await interaction.editReply(
@@ -250,15 +331,13 @@ async function handleReject(interaction: ButtonInteraction, targetUserId: string
 
     await interaction.message.edit({ embeds: [embed], components: [] });
 
-    if (interaction.channel) {
-      try {
+    try {
+      if (interaction.channel && "send" in interaction.channel) {
         await (interaction.channel as { send: (msg: string) => Promise<unknown> }).send(
           `❌ <@${targetUserId}> のロール申請は却下されました。ご不明な点はスタッフにお問い合わせください。`
         );
-      } catch {
-        // non-fatal
       }
-    }
+    } catch { /* non-fatal */ }
 
     await interaction.editReply(`✅ <@${targetUserId}> の申請を却下しました。`);
     logger.info({ targetUserId, rejectedBy: interaction.user.id }, "Ticket rejected");
@@ -270,11 +349,14 @@ async function handleReject(interaction: ButtonInteraction, targetUserId: string
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function extractPurchaseIdFromEmbed(interaction: ButtonInteraction): string | null {
+function extractFieldFromEmbed(
+  interaction: ButtonInteraction,
+  fieldNameFragment: string
+): string | null {
   try {
     const embed = interaction.message.embeds[0];
     if (!embed) return null;
-    const field = embed.fields.find((f) => f.name.includes("購入番号"));
+    const field = embed.fields.find((f) => f.name.includes(fieldNameFragment));
     if (!field) return null;
     return field.value.replace(/`/g, "").trim();
   } catch {

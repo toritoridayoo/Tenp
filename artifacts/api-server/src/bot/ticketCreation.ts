@@ -12,13 +12,22 @@ import {
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 
+export type ProductType = "permanent" | "1month";
+
+const PRODUCT_LABELS: Record<ProductType, string> = {
+  permanent: "Tori+ランク（永久版）🌟",
+  "1month": "Tori+ランク（1ヶ月版）⏰",
+};
+
 export async function createTicketChannel(
   guild: Guild,
   user: User,
-  purchaseId: string
+  mcid: string,
+  purchaseId: string,
+  product: ProductType
 ): Promise<string> {
-  // Create a new text channel in the ticket category
-  const channelName = `ticket-${user.username.toLowerCase().replace(/[^a-z0-9]/g, "")}-${Date.now().toString(36)}`;
+  const safeName = user.username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20);
+  const channelName = `ticket-${safeName}-${Date.now().toString(36)}`;
 
   const ticketChannel = await guild.channels.create({
     name: channelName,
@@ -48,16 +57,17 @@ export async function createTicketChannel(
     ],
   });
 
-  // Build approve/reject buttons
+  // The approve button customId encodes the duration so staff just clicks one button
+  const approveCustomId =
+    product === "permanent"
+      ? `approve_permanent_${user.id}`
+      : `approve_1month_${user.id}`;
+
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`approve_1month_${user.id}`)
-      .setLabel("✅ 承認（1ヶ月）")
+      .setCustomId(approveCustomId)
+      .setLabel("✅ 承認")
       .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`approve_permanent_${user.id}`)
-      .setLabel("🌟 承認（永久）")
-      .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId(`reject_${user.id}`)
       .setLabel("❌ 却下")
@@ -68,12 +78,14 @@ export async function createTicketChannel(
     .setColor(Colors.Yellow)
     .setTitle("📋 新しいロール申請チケット")
     .setDescription(
-      `<@${user.id}> からBoothの購入申請が届きました。\n\n` +
-        `スタッフは下のボタンで承認または却下してください。`
+      `<@${user.id}> からBoothの購入申請が届きました。\n` +
+        `スタッフは確認後、下のボタンで承認または却下してください。`
     )
     .addFields(
       { name: "👤 申請者", value: `<@${user.id}> (${user.tag})`, inline: true },
-      { name: "🧾 購入番号", value: `\`${purchaseId}\``, inline: true }
+      { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+      { name: "🧾 購入番号", value: `\`${purchaseId}\``, inline: true },
+      { name: "📦 申請商品", value: PRODUCT_LABELS[product], inline: false }
     )
     .setTimestamp()
     .setFooter({ text: `ユーザーID: ${user.id}` });
@@ -85,7 +97,7 @@ export async function createTicketChannel(
   });
 
   logger.info(
-    { userId: user.id, purchaseId, channelId: ticketChannel.id },
+    { userId: user.id, mcid, purchaseId, product, channelId: ticketChannel.id },
     "Ticket channel created"
   );
 
