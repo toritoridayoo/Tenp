@@ -307,7 +307,7 @@ export async function createBugTicketChannel(
     components: [row],
   });
 
-  await sendTicketLog(guild, user, [
+  await sendSupportTicketLog(guild, user, [
     { name: "📂 種別", value: "バグ報告", inline: true },
     { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
     { name: "🐛 バグの内容", value: bugContent, inline: false },
@@ -361,7 +361,7 @@ export async function createReportTicketChannel(
     components: [row],
   });
 
-  await sendTicketLog(guild, user, [
+  await sendSupportTicketLog(guild, user, [
     { name: "📂 種別", value: "プレイヤー通報", inline: true },
     { name: "🎮 通報者 MCID", value: `\`${ownMcid}\``, inline: true },
     { name: "⚠️ 対象 MCID", value: `\`${reportedMcid}\``, inline: true },
@@ -414,7 +414,7 @@ export async function createAppealTicketChannel(
     components: [row],
   });
 
-  await sendTicketLog(guild, user, [
+  await sendSupportTicketLog(guild, user, [
     { name: "📂 種別", value: "異議申し立て", inline: true },
     { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
     { name: "📝 詳細", value: details, inline: false },
@@ -425,7 +425,30 @@ export async function createAppealTicketChannel(
   return ticketChannel.id;
 }
 
-// ── Log helper ────────────────────────────────────────────────────────────
+// ── Log helpers ───────────────────────────────────────────────────────────
+
+async function sendSupportTicketLog(
+  guild: Guild,
+  user: User,
+  fields: { name: string; value: string; inline?: boolean }[]
+): Promise<void> {
+  const channelId = botConfig.supportLogChannelId || botConfig.ticketLogChannelId;
+  try {
+    const logChannel = await guild.channels.fetch(channelId);
+    if (!logChannel || !(logChannel instanceof TextChannel)) return;
+
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Blue)
+      .setTitle("🎫 新規チケット作成")
+      .addFields({ name: "👤 申請者", value: `<@${user.id}> (${user.tag})`, inline: true }, ...fields)
+      .setTimestamp()
+      .setFooter({ text: `ユーザーID: ${user.id}` });
+
+    await logChannel.send({ embeds: [embed] });
+  } catch (err) {
+    logger.error({ err }, "Failed to send support ticket log");
+  }
+}
 
 async function sendTicketLog(
   guild: Guild,

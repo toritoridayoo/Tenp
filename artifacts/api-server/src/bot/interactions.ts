@@ -39,6 +39,16 @@ import {
   type KeyItem,
 } from "./pendingTickets.js";
 
+// ── Staff role check ──────────────────────────────────────────────────────
+
+function isStaff(member: GuildMember | null): boolean {
+  if (!member) return false;
+  return (
+    member.roles.cache.has(botConfig.staffRoleId) ||
+    (botConfig.subStaffRoleId !== "" && member.roles.cache.has(botConfig.subStaffRoleId))
+  );
+}
+
 // ── Main router ───────────────────────────────────────────────────────────
 
 export async function handleInteraction(interaction: Interaction) {
@@ -99,7 +109,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
 
   if (rejectMatch || keyRejectMatch || mediaRejectMatch) {
     const member = interaction.member as GuildMember | null;
-    if (!member || !member.roles.cache.has(botConfig.staffRoleId)) {
+    if (!isStaff(member)) {
       await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
       return;
     }
@@ -119,7 +129,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   await interaction.deferReply({ flags: 64 });
 
   const member = interaction.member as GuildMember | null;
-  if (!member || !member.roles.cache.has(botConfig.staffRoleId)) {
+  if (!isStaff(member)) {
     await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ押せます。");
     return;
   }
@@ -574,7 +584,7 @@ async function handleCloseTicket(
   await interaction.deferReply({ flags: 64 });
 
   const member = interaction.member as GuildMember | null;
-  if (!member || !member.roles.cache.has(botConfig.staffRoleId)) {
+  if (!isStaff(member)) {
     await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ押せます。");
     return;
   }
@@ -694,7 +704,7 @@ async function handleRejectReasonSubmit(
   await interaction.deferReply({ flags: 64 });
 
   const member = interaction.member as GuildMember | null;
-  if (!member || !member.roles.cache.has(botConfig.staffRoleId)) {
+  if (!isStaff(member)) {
     await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ操作できます。");
     return;
   }
@@ -847,7 +857,7 @@ async function handleGrantComplete(interaction: ButtonInteraction) {
   await interaction.deferReply({ flags: 64 });
 
   const member = interaction.member as GuildMember | null;
-  if (!member || !member.roles.cache.has(botConfig.staffRoleId)) {
+  if (!isStaff(member)) {
     await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ押せます。");
     return;
   }
