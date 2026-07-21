@@ -15,13 +15,12 @@ const commands = [
   new SlashCommandBuilder()
     .setName("purchase_send")
     .setDescription("Booth購入申請パネルを指定チャンネルに送信します（スタッフ専用）")
-    .addChannelOption((option) =>
-      option
-        .setName("channel")
-        .setDescription("パネルを送信するテキストチャンネル")
-        .addChannelTypes(ChannelType.GuildText)
-        .setRequired(true)
-    )
+    .addChannelOption((o) => o.setName("channel").setDescription("パネルを送信するテキストチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("ticketpanel_send")
+    .setDescription("サポートチケットパネルを指定チャンネルに送信します（スタッフ専用）")
+    .addChannelOption((o) => o.setName("channel").setDescription("パネルを送信するテキストチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
     .toJSON(),
 ];
 
@@ -39,7 +38,7 @@ async function registerCommands(token: string, clientId: string) {
 }
 
 export async function startBot(): Promise<void> {
-  const token = process.env["DISCORD_BOT_TOKEN"];
+  const token = process.env["DISCORD_TOKEN"];
 
   if (!token) {
     logger.warn("DISCORD_BOT_TOKEN not set — Discord bot disabled");

@@ -9,6 +9,59 @@ import {
 } from "discord.js";
 import { logger } from "../lib/logger.js";
 
+export async function handleTicketPanelSendCommand(
+  interaction: ChatInputCommandInteraction
+): Promise<void> {
+  const targetChannel = interaction.options.getChannel("channel", true);
+  await interaction.deferReply({ flags: 64 });
+
+  try {
+    const channel = await interaction.client.channels.fetch(targetChannel.id);
+    if (!channel || !(channel instanceof TextChannel)) {
+      await interaction.editReply("テキストチャンネルを指定してください。");
+      return;
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(Colors.DarkBlue)
+      .setTitle("🎫 サポートチケットパネル")
+      .setDescription(
+        "お困りのことがあれば下のボタンから申請してください。\n\n" +
+        "🐛 **バグ報告**\n" +
+        "　ゲーム内のバグや不具合の報告\n\n" +
+        "🚨 **プレイヤー通報**\n" +
+        "　ルール違反プレイヤーの通報\n\n" +
+        "⚖️ **異議申し立て**\n" +
+        "　BAN・ミュートなどの処分への異議申し立て\n\n" +
+        "> スタッフが確認次第、対応します。"
+      )
+      .setFooter({ text: "虚偽の報告はペナルティの対象になる場合があります" })
+      .setTimestamp();
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("open_bug_ticket")
+        .setLabel("🐛 バグ報告")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("open_report_ticket")
+        .setLabel("🚨 プレイヤー通報")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId("open_appeal_ticket")
+        .setLabel("⚖️ 異議申し立て")
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    await channel.send({ embeds: [embed], components: [row] });
+    await interaction.editReply(`✅ <#${channel.id}> にサポートパネルを送信しました！`);
+    logger.info({ channelId: channel.id }, "Support ticket panel sent");
+  } catch (err) {
+    logger.error({ err }, "Failed to send support ticket panel");
+    await interaction.editReply("❌ パネルの送信中にエラーが発生しました。");
+  }
+}
+
 export async function handlePurchaseSendCommand(
   interaction: ChatInputCommandInteraction
 ): Promise<void> {

@@ -20,11 +20,14 @@ import { db } from "@workspace/db";
 import { roleGrantsTable } from "@workspace/db";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
-import { handlePurchaseSendCommand } from "./panelCommand.js";
+import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panelCommand.js";
 import {
   createTicketChannel,
   createKeyTicketChannel,
   createMediaTicketChannel,
+  createBugTicketChannel,
+  createReportTicketChannel,
+  createAppealTicketChannel,
   PRODUCT_LABELS,
   KEY_QUANTITIES,
   type ProductType,
@@ -40,9 +43,8 @@ import {
 
 export async function handleInteraction(interaction: Interaction) {
   if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === "purchase_send") {
-      await handlePurchaseSendCommand(interaction);
-    }
+    if (interaction.commandName === "purchase_send")    await handlePurchaseSendCommand(interaction);
+    if (interaction.commandName === "ticketpanel_send") await handleTicketPanelSendCommand(interaction);
     return;
   }
   if (interaction.isButton()) {
@@ -64,10 +66,19 @@ export async function handleInteraction(interaction: Interaction) {
 async function handleButtonInteraction(interaction: ButtonInteraction) {
   const { customId } = interaction;
 
-  // Panel buttons → open modals
-  if (customId === "open_ticket")       { await interaction.showModal(buildRankModal());  return; }
-  if (customId === "open_key_ticket")   { await interaction.showModal(buildKeyModal());   return; }
-  if (customId === "open_media_ticket") { await interaction.showModal(buildMediaModal()); return; }
+  // Purchase panel buttons → open modals
+  if (customId === "open_ticket")       { await interaction.showModal(buildRankModal());   return; }
+  if (customId === "open_key_ticket")   { await interaction.showModal(buildKeyModal());    return; }
+  if (customId === "open_media_ticket") { await interaction.showModal(buildMediaModal());  return; }
+
+  // Support panel buttons → open modals
+  if (customId === "open_bug_ticket")    { await interaction.showModal(buildBugModal());    return; }
+  if (customId === "open_report_ticket") { await interaction.showModal(buildReportModal()); return; }
+  if (customId === "open_appeal_ticket") { await interaction.showModal(buildAppealModal()); return; }
+
+  // Support ticket close buttons
+  const closeTicketMatch = customId.match(/^close_ticket_(bug|report|appeal)_(\d+)$/);
+  if (closeTicketMatch) { await handleCloseTicket(interaction, closeTicketMatch[1] as "bug" | "report" | "appeal", closeTicketMatch[2]!); return; }
 
   // Rank product selection
   if (customId.startsWith("product_")) { await handleProductSelection(interaction); return; }
@@ -190,6 +201,62 @@ function buildRejectReasonModal(type: "rank" | "key" | "media", targetId: string
   return modal;
 }
 
+function buildBugModal(): ModalBuilder {
+  const modal = new ModalBuilder().setCustomId("bug_modal").setTitle("🐛 バグ報告");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("mcid_input").setLabel("Minecraft ユーザーネーム")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: Steve123")
+        .setMinLength(3).setMaxLength(16).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("bug_content_input").setLabel("バグの内容")
+        .setStyle(TextInputStyle.Paragraph).setPlaceholder("どのような不具合が発生しましたか？再現手順などを詳しく教えてください。")
+        .setMinLength(10).setMaxLength(1000).setRequired(true)
+    )
+  );
+  return modal;
+}
+
+function buildReportModal(): ModalBuilder {
+  const modal = new ModalBuilder().setCustomId("report_modal").setTitle("🚨 プレイヤー通報");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("own_mcid_input").setLabel("自身の Minecraft ID")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: Steve123")
+        .setMinLength(3).setMaxLength(16).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("reported_mcid_input").setLabel("違反していると思われるプレイヤーの Minecraft ID")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: Griefer456")
+        .setMinLength(3).setMaxLength(16).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("violation_input").setLabel("違反内容")
+        .setStyle(TextInputStyle.Paragraph).setPlaceholder("どのようなルール違反でしたか？日時・場所なども教えてください。")
+        .setMinLength(10).setMaxLength(1000).setRequired(true)
+    )
+  );
+  return modal;
+}
+
+function buildAppealModal(): ModalBuilder {
+  const modal = new ModalBuilder().setCustomId("appeal_modal").setTitle("⚖️ 異議申し立て");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("mcid_input").setLabel("Minecraft ID")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: Steve123")
+        .setMinLength(3).setMaxLength(16).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("appeal_detail_input").setLabel("詳細")
+        .setStyle(TextInputStyle.Paragraph).setPlaceholder("申し立ての理由・状況を詳しく教えてください。")
+        .setMinLength(10).setMaxLength(1000).setRequired(true)
+    )
+  );
+  return modal;
+}
+
 function buildKeyAddModal(): ModalBuilder {
   const modal = new ModalBuilder().setCustomId("key_add_modal").setTitle("🔑 追加の購入番号を入力");
   modal.addComponents(
@@ -205,10 +272,13 @@ function buildKeyAddModal(): ModalBuilder {
 // ── Modal submit router ───────────────────────────────────────────────────
 
 async function handleModalSubmit(interaction: ModalSubmitInteraction) {
-  if (interaction.customId === "rank_modal")    { await handleRankModalSubmit(interaction);  return; }
-  if (interaction.customId === "key_modal")     { await handleKeyModalSubmit(interaction);   return; }
-  if (interaction.customId === "key_add_modal") { await handleKeyAddModalSubmit(interaction);return; }
-  if (interaction.customId === "media_modal")   { await handleMediaModalSubmit(interaction); return; }
+  if (interaction.customId === "rank_modal")    { await handleRankModalSubmit(interaction);   return; }
+  if (interaction.customId === "key_modal")     { await handleKeyModalSubmit(interaction);    return; }
+  if (interaction.customId === "key_add_modal") { await handleKeyAddModalSubmit(interaction); return; }
+  if (interaction.customId === "media_modal")   { await handleMediaModalSubmit(interaction);  return; }
+  if (interaction.customId === "bug_modal")     { await handleBugModalSubmit(interaction);    return; }
+  if (interaction.customId === "report_modal")  { await handleReportModalSubmit(interaction); return; }
+  if (interaction.customId === "appeal_modal")  { await handleAppealModalSubmit(interaction); return; }
 
   // Reject reason modals: reject_reason_{type}_{userId}_{messageId}
   const rejectModal = interaction.customId.match(/^reject_reason_(rank|key|media)_(\d+)_(\d+)$/);
@@ -442,6 +512,112 @@ async function handleMediaModalSubmit(interaction: ModalSubmitInteraction) {
   } catch (err) {
     logger.error({ err }, "Failed to create media ticket channel");
     await interaction.editReply("❌ チケットの作成中にエラーが発生しました。");
+  }
+}
+
+// ── Bug modal → create ticket ─────────────────────────────────────────────
+
+async function handleBugModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+  const mcid       = interaction.fields.getTextInputValue("mcid_input").trim();
+  const bugContent = interaction.fields.getTextInputValue("bug_content_input").trim();
+  if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
+  try {
+    const channelId = await createBugTicketChannel(interaction.guild, interaction.user, mcid, bugContent);
+    await interaction.editReply(`✅ バグ報告チケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
+  } catch (err) {
+    logger.error({ err }, "Failed to create bug ticket channel");
+    await interaction.editReply("❌ チケットの作成中にエラーが発生しました。");
+  }
+}
+
+// ── Report modal → create ticket ──────────────────────────────────────────
+
+async function handleReportModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+  const ownMcid          = interaction.fields.getTextInputValue("own_mcid_input").trim();
+  const reportedMcid     = interaction.fields.getTextInputValue("reported_mcid_input").trim();
+  const violationContent = interaction.fields.getTextInputValue("violation_input").trim();
+  if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
+  try {
+    const channelId = await createReportTicketChannel(interaction.guild, interaction.user, ownMcid, reportedMcid, violationContent);
+    await interaction.editReply(`✅ プレイヤー通報チケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
+  } catch (err) {
+    logger.error({ err }, "Failed to create report ticket channel");
+    await interaction.editReply("❌ チケットの作成中にエラーが発生しました。");
+  }
+}
+
+// ── Appeal modal → create ticket ──────────────────────────────────────────
+
+async function handleAppealModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+  const mcid    = interaction.fields.getTextInputValue("mcid_input").trim();
+  const details = interaction.fields.getTextInputValue("appeal_detail_input").trim();
+  if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
+  try {
+    const channelId = await createAppealTicketChannel(interaction.guild, interaction.user, mcid, details);
+    await interaction.editReply(`✅ 異議申し立てチケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
+  } catch (err) {
+    logger.error({ err }, "Failed to create appeal ticket channel");
+    await interaction.editReply("❌ チケットの作成中にエラーが発生しました。");
+  }
+}
+
+// ── Support ticket: close ─────────────────────────────────────────────────
+
+async function handleCloseTicket(
+  interaction: ButtonInteraction,
+  type: "bug" | "report" | "appeal",
+  targetUserId: string,
+) {
+  await interaction.deferReply({ flags: 64 });
+
+  const member = interaction.member as GuildMember | null;
+  if (!member || !member.roles.cache.has(botConfig.staffRoleId)) {
+    await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ押せます。");
+    return;
+  }
+
+  const typeLabels = { bug: "バグ報告", report: "プレイヤー通報", appeal: "異議申し立て" };
+  const label = typeLabels[type];
+
+  try {
+    await interaction.message.edit({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.DarkGreen)
+          .setTitle(`✅ 対応済み — ${label}チケット終了`)
+          .addFields(
+            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
+            { name: "✅ 対応スタッフ", value: `<@${interaction.user.id}>`, inline: true }
+          ).setTimestamp()
+      ],
+      components: [],
+    });
+
+    // DM the user
+    const targetMember = await (interaction.guild as Guild).members.fetch(targetUserId).catch(() => null);
+    if (targetMember) {
+      const dmMessages: Record<string, string> = {
+        bug:    "ご報告いただいたバグについて、スタッフが対応を完了しました。ご協力ありがとうございました。",
+        report: "ご通報いただいた内容について、スタッフが確認・対応を完了しました。ご協力ありがとうございました。",
+        appeal: "異議申し立ての内容について、スタッフが確認・対応を完了しました。ご不明な点があればお気軽にお問い合わせください。",
+      };
+      await sendDM(targetMember, new EmbedBuilder()
+        .setColor(Colors.Green)
+        .setTitle(`✅ ${label}チケットが対応済みになりました`)
+        .setDescription(dmMessages[type]!)
+        .setTimestamp()
+      );
+    }
+
+    await closeTicketChannel(interaction.channel as TextChannel | null, targetUserId, "対応済み");
+    await interaction.editReply(`✅ チケットを対応済みとしてクローズしました。`);
+    logger.info({ targetUserId, type, closedBy: interaction.user.id }, "Support ticket closed");
+  } catch (err) {
+    logger.error({ err }, "Failed to close support ticket");
+    await interaction.editReply("❌ クローズ処理中にエラーが発生しました。");
   }
 }
 

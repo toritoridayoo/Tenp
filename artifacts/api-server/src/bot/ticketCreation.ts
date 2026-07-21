@@ -71,7 +71,7 @@ export async function createTicketChannel(
 ): Promise<string> {
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `🔔ランク受け取り-${safeMcid}`,
+    name: `[🔔]ランク受け取り-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
@@ -136,7 +136,7 @@ export async function createKeyTicketChannel(
 ): Promise<string> {
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `🔔鍵・シャード受け取り-${safeMcid}`,
+    name: `[🔔]鍵・シャード受け取り-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
@@ -206,7 +206,7 @@ export async function createMediaTicketChannel(
 ): Promise<string> {
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `🎥メディアランク申請-${safeMcid}`,
+    name: `[🎥]メディアランク申請-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
@@ -263,6 +263,165 @@ export async function createMediaTicketChannel(
   ]);
 
   logger.info({ userId: user.id, mcid, youtubeUrl, channelId: ticketChannel.id }, "Media ticket created");
+  return ticketChannel.id;
+}
+
+// ── Bug report ticket ─────────────────────────────────────────────────────
+
+export async function createBugTicketChannel(
+  guild: Guild,
+  user: User,
+  mcid: string,
+  bugContent: string
+): Promise<string> {
+  const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
+  const ticketChannel = await guild.channels.create({
+    name: `[🐛]バグ報告-${safeMcid}`,
+    type: ChannelType.GuildText,
+    parent: botConfig.ticketChannelId,
+    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+  });
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`close_ticket_bug_${user.id}`)
+      .setLabel("✅ 対応済み（クローズ）")
+      .setStyle(ButtonStyle.Success)
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor(Colors.Orange)
+    .setTitle("🐛 バグ報告チケット")
+    .setDescription(`<@${user.id}> からバグ報告が届きました。\nスタッフは確認・対応後、クローズしてください。`)
+    .addFields(
+      { name: "👤 報告者", value: `<@${user.id}> (${user.tag})`, inline: true },
+      { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+      { name: "🐛 バグの内容", value: bugContent, inline: false }
+    )
+    .setTimestamp()
+    .setFooter({ text: `ユーザーID: ${user.id}` });
+
+  await ticketChannel.send({
+    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    embeds: [embed],
+    components: [row],
+  });
+
+  await sendTicketLog(guild, user, [
+    { name: "📂 種別", value: "バグ報告", inline: true },
+    { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+    { name: "🐛 バグの内容", value: bugContent, inline: false },
+    { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
+  ]);
+
+  logger.info({ userId: user.id, mcid, channelId: ticketChannel.id }, "Bug ticket created");
+  return ticketChannel.id;
+}
+
+// ── Player report ticket ──────────────────────────────────────────────────
+
+export async function createReportTicketChannel(
+  guild: Guild,
+  user: User,
+  ownMcid: string,
+  reportedMcid: string,
+  violationContent: string
+): Promise<string> {
+  const safeMcid = ownMcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
+  const ticketChannel = await guild.channels.create({
+    name: `[🚨]プレイヤー通報-${safeMcid}`,
+    type: ChannelType.GuildText,
+    parent: botConfig.ticketChannelId,
+    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+  });
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`close_ticket_report_${user.id}`)
+      .setLabel("✅ 対応済み（クローズ）")
+      .setStyle(ButtonStyle.Success)
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor(Colors.Red)
+    .setTitle("🚨 プレイヤー通報チケット")
+    .setDescription(`<@${user.id}> からプレイヤー通報が届きました。\nスタッフは確認・対応後、クローズしてください。`)
+    .addFields(
+      { name: "👤 通報者", value: `<@${user.id}> (${user.tag})`, inline: true },
+      { name: "🎮 通報者 Minecraft ID", value: `\`${ownMcid}\``, inline: true },
+      { name: "⚠️ 対象プレイヤー Minecraft ID", value: `\`${reportedMcid}\``, inline: true },
+      { name: "📋 違反内容", value: violationContent, inline: false }
+    )
+    .setTimestamp()
+    .setFooter({ text: `ユーザーID: ${user.id}` });
+
+  await ticketChannel.send({
+    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    embeds: [embed],
+    components: [row],
+  });
+
+  await sendTicketLog(guild, user, [
+    { name: "📂 種別", value: "プレイヤー通報", inline: true },
+    { name: "🎮 通報者 MCID", value: `\`${ownMcid}\``, inline: true },
+    { name: "⚠️ 対象 MCID", value: `\`${reportedMcid}\``, inline: true },
+    { name: "📋 違反内容", value: violationContent, inline: false },
+    { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
+  ]);
+
+  logger.info({ userId: user.id, ownMcid, reportedMcid, channelId: ticketChannel.id }, "Report ticket created");
+  return ticketChannel.id;
+}
+
+// ── Appeal ticket ─────────────────────────────────────────────────────────
+
+export async function createAppealTicketChannel(
+  guild: Guild,
+  user: User,
+  mcid: string,
+  details: string
+): Promise<string> {
+  const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
+  const ticketChannel = await guild.channels.create({
+    name: `[⚖️]異議申し立て-${safeMcid}`,
+    type: ChannelType.GuildText,
+    parent: botConfig.ticketChannelId,
+    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+  });
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`close_ticket_appeal_${user.id}`)
+      .setLabel("✅ 対応済み（クローズ）")
+      .setStyle(ButtonStyle.Success)
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor(Colors.Purple)
+    .setTitle("⚖️ 異議申し立てチケット")
+    .setDescription(`<@${user.id}> から異議申し立てが届きました。\nスタッフは確認・対応後、クローズしてください。`)
+    .addFields(
+      { name: "👤 申請者", value: `<@${user.id}> (${user.tag})`, inline: true },
+      { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+      { name: "📝 詳細", value: details, inline: false }
+    )
+    .setTimestamp()
+    .setFooter({ text: `ユーザーID: ${user.id}` });
+
+  await ticketChannel.send({
+    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    embeds: [embed],
+    components: [row],
+  });
+
+  await sendTicketLog(guild, user, [
+    { name: "📂 種別", value: "異議申し立て", inline: true },
+    { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+    { name: "📝 詳細", value: details, inline: false },
+    { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
+  ]);
+
+  logger.info({ userId: user.id, mcid, channelId: ticketChannel.id }, "Appeal ticket created");
   return ticketChannel.id;
 }
 
