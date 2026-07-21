@@ -1,10 +1,8 @@
 import {
   ChatInputCommandInteraction,
-  Colors,
   EmbedBuilder,
   TextChannel,
 } from "discord.js";
-import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 
 // ── /embed コマンド ──────────────────────────────────────────────────────────
@@ -36,7 +34,6 @@ export async function handleEmbedCommand(
       return;
     }
 
-    // Build embed
     const embed = new EmbedBuilder();
     if (color !== undefined) embed.setColor(color);
     if (title)        embed.setTitle(title);
@@ -45,7 +42,7 @@ export async function handleEmbedCommand(
     if (thumbnailUrl) embed.setThumbnail(thumbnailUrl);
     if (footerText)   embed.setFooter({ text: footerText });
 
-    // Build command reconstruction string
+    // Build command string (shown as code block above the embed)
     const parts = [`/embed channel:<#${ch.id}>`];
     if (title)        parts.push(`title:${title}`);
     if (description)  parts.push(`description:${description}`);
@@ -55,30 +52,10 @@ export async function handleEmbedCommand(
     if (footerText)   parts.push(`footer:${footerText}`);
     const commandStr = parts.join(" ");
 
-    // Send the embed with the command code block directly above it (same message)
     await ch.send({
       content: `\`\`\`\n${commandStr}\n\`\`\``,
       embeds: [embed],
     });
-
-    // Log to ticketLogChannel (simple, no button needed)
-    if (botConfig.ticketLogChannelId) {
-      const logCh = await interaction.client.channels.fetch(botConfig.ticketLogChannelId).catch(() => null);
-      if (logCh instanceof TextChannel) {
-        await logCh.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(Colors.Blurple)
-              .setTitle("📝 Embedを作成しました")
-              .addFields(
-                { name: "👤 実行者", value: `<@${interaction.user.id}>`, inline: true },
-                { name: "📢 送信先", value: `<#${ch.id}>`, inline: true },
-              )
-              .setTimestamp(),
-          ],
-        });
-      }
-    }
 
     await interaction.editReply(`✅ <#${ch.id}> にEmbedを送信しました！`);
     logger.info({ channelId: ch.id, userId: interaction.user.id }, "Embed sent");

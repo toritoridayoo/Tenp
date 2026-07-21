@@ -112,6 +112,20 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   // Grant complete
   if (customId.startsWith("grant_complete_")) { await handleGrantComplete(interaction); return; }
 
+  // User receipt confirmation (only ticket creator can press)
+  if (customId.startsWith("user_receipt_")) {
+    const receiptUserId = customId.replace("user_receipt_", "");
+    if (interaction.user.id !== receiptUserId) {
+      await interaction.reply({ content: "❌ このボタンはチケット申請者のみ押せます。", flags: 64 });
+      return;
+    }
+    await interaction.deferReply({ flags: 64 });
+    await interaction.message.edit({ components: [] });
+    await closeTicketChannel(interaction.channel as TextChannel | null, receiptUserId, "受け取り確認完了");
+    await interaction.editReply("✅ 受け取り確認が完了しました。チケットをクローズします。");
+    return;
+  }
+
   // Key multi-item: "add more" / "create ticket"
   const keyAddMatch = customId.match(/^key_add_more_(\d+)$/);
   const keyDoneMatch = customId.match(/^key_no_more_(\d+)$/);
@@ -760,7 +774,6 @@ async function handleRankApprove(
       components: [],
     });
 
-    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id, 0x00BFFF);
     await sendDM(targetMember, new EmbedBuilder()
       .setColor(Colors.Green).setTitle("✅ ロール申請が承認されました")
       .setDescription(`あなたのロール申請が承認されました！`)
@@ -769,8 +782,8 @@ async function handleRankApprove(
         { name: "付与期間", value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true }
       ).setTimestamp()
     );
-    await closeTicketChannel(interaction.channel as TextChannel | null, targetUserId, "承認");
-    await interaction.editReply(`✅ <@${targetUserId}> を承認しました。チケットを閉じます。`);
+    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id, 0x00BFFF, interaction.channelId);
+    await interaction.editReply(`✅ <@${targetUserId}> を承認しました。ゲーム内付与後に付与完了ボタンを押してください。`);
     logger.info({ targetUserId, durationType, mcid, grantedBy: interaction.user.id }, "Rank role granted");
   } catch (err) {
     logger.error({ err }, "Failed to grant rank role");
@@ -860,7 +873,7 @@ async function handleKeyApprove(interaction: ButtonInteraction, targetUserId: st
       components: [],
     });
 
-    await sendKeyApprovalNotification(interaction.guild as Guild, targetUserId, mcid ?? "不明", interaction.message.embeds[0]!.fields, interaction.user.id, 0x00BFFF);
+    await sendKeyApprovalNotification(interaction.guild as Guild, targetUserId, mcid ?? "不明", interaction.message.embeds[0]!.fields, interaction.user.id, 0x00BFFF, interaction.channelId);
     const keyTargetMember = await (interaction.guild as Guild).members.fetch(targetUserId).catch(() => null);
     if (keyTargetMember) {
       const itemSummary = interaction.message.embeds[0]!.fields
@@ -873,8 +886,7 @@ async function handleKeyApprove(interaction: ButtonInteraction, targetUserId: st
         .setTimestamp()
       );
     }
-    await closeTicketChannel(interaction.channel as TextChannel | null, targetUserId, "付与済み");
-    await interaction.editReply(`✅ <@${targetUserId}> の鍵・シャード付与を確認しました。チケットを閉じます。`);
+    await interaction.editReply(`✅ <@${targetUserId}> の鍵・シャード付与を確認しました。ゲーム内付与後に付与完了ボタンを押してください。`);
     logger.info({ targetUserId }, "Key ticket approved");
   } catch (err) {
     logger.error({ err }, "Failed to approve key ticket");
@@ -919,15 +931,14 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
       components: [],
     });
 
-    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", "メディアランク 📺", false, expiresAt, interaction.user.id, Colors.Red);
+    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", "メディアランク 📺", false, expiresAt, interaction.user.id, Colors.Red, interaction.channelId);
     await sendDM(targetMember, new EmbedBuilder()
       .setColor(Colors.Green).setTitle("✅ メディアランク申請が承認されました")
       .setDescription("あなたのメディアランク申請が承認されました！")
       .addFields({ name: "⏰ 期限", value: expiresAt.toLocaleDateString("ja-JP"), inline: true })
       .setTimestamp()
     );
-    await closeTicketChannel(interaction.channel as TextChannel | null, targetUserId, "承認");
-    await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を承認し、ロールを付与しました（1ヶ月）。`);
+    await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を承認し、ロールを付与しました（1ヶ月）。ゲーム内付与後に付与完了ボタンを押してください。`);
     logger.info({ targetUserId, mcid, expiresAt }, "Media ticket approved");
   } catch (err) {
     logger.error({ err }, "Failed to approve media ticket");
@@ -959,8 +970,37 @@ async function handleGrantComplete(interaction: ButtonInteraction) {
       ).setTimestamp();
 
     await interaction.message.edit({ embeds: [completedEmbed], components: [] });
-    await interaction.editReply("✅ 付与完了としてマークしました。");
-    logger.info({ completedBy: interaction.user.id }, "Grant marked complete");
+
+    // Extract ticket channel ID and send receipt confirmation button to the user
+    const ticketChannelMention = originalEmbed?.fields.find(f => f.name === "🎫 チケット")?.value;
+    const ticketChannelId = ticketChannelMention?.match(/(\d+)/)?.[1];
+    const targetUserId = interaction.customId.replace("grant_complete_", "");
+
+    if (ticketChannelId) {
+      const ticketCh = await interaction.guild?.channels.fetch(ticketChannelId).catch(() => null);
+      if (ticketCh instanceof TextChannel) {
+        const receiptRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`user_receipt_${targetUserId}`)
+            .setLabel("✅ 商品を受け取りました")
+            .setStyle(ButtonStyle.Success)
+        );
+        await ticketCh.send({
+          content: `<@${targetUserId}>`,
+          embeds: [
+            new EmbedBuilder()
+              .setColor(Colors.Gold)
+              .setTitle("📦 商品の受け取り確認")
+              .setDescription("ゲーム内での付与が完了しました。\n商品を受け取ったことを確認したら下のボタンを押してください。\nボタンを押すとチケットがクローズされます。")
+              .setTimestamp()
+          ],
+          components: [receiptRow],
+        });
+      }
+    }
+
+    await interaction.editReply("✅ 付与完了としてマークしました。チケットに受け取り確認ボタンを送信しました。");
+    logger.info({ completedBy: interaction.user.id, targetUserId, ticketChannelId }, "Grant marked complete");
   } catch (err) {
     logger.error({ err }, "Failed to mark grant complete");
     await interaction.editReply("❌ エラーが発生しました。");
@@ -971,7 +1011,8 @@ async function handleGrantComplete(interaction: ButtonInteraction) {
 
 async function sendApprovalNotification(
   guild: Guild, targetUserId: string, mcid: string, productLabel: string,
-  permanent: boolean, expiresAt: Date | null, approvedBy: string, color: number = Colors.Gold
+  permanent: boolean, expiresAt: Date | null, approvedBy: string, color: number = Colors.Gold,
+  ticketChannelId?: string
 ) {
   try {
     const ch = await guild.channels.fetch(botConfig.approvalChannelId);
@@ -985,7 +1026,8 @@ async function sendApprovalNotification(
         { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
         { name: "📦 商品", value: productLabel, inline: true },
         { name: "⏰ 付与期間", value: permanent ? "永久" : `1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true },
-        { name: "承認スタッフ", value: `<@${approvedBy}>`, inline: true }
+        { name: "承認スタッフ", value: `<@${approvedBy}>`, inline: true },
+        ...(ticketChannelId ? [{ name: "🎫 チケット", value: `<#${ticketChannelId}>`, inline: true }] : [])
       ).setTimestamp();
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -1000,7 +1042,8 @@ async function sendApprovalNotification(
 
 async function sendKeyApprovalNotification(
   guild: Guild, targetUserId: string, mcid: string,
-  itemFields: { name: string; value: string }[], approvedBy: string, color: number = Colors.Gold
+  itemFields: { name: string; value: string }[], approvedBy: string, color: number = Colors.Gold,
+  ticketChannelId?: string
 ) {
   try {
     const ch = await guild.channels.fetch(botConfig.approvalChannelId);
@@ -1013,7 +1056,8 @@ async function sendKeyApprovalNotification(
         { name: "👤 プレイヤー", value: `<@${targetUserId}>`, inline: true },
         { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
         ...itemFields.filter((f) => f.name.startsWith("📦 アイテム")),
-        { name: "対応スタッフ", value: `<@${approvedBy}>`, inline: false }
+        { name: "対応スタッフ", value: `<@${approvedBy}>`, inline: false },
+        ...(ticketChannelId ? [{ name: "🎫 チケット", value: `<#${ticketChannelId}>`, inline: true }] : [])
       ).setTimestamp();
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
