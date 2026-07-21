@@ -1133,7 +1133,52 @@ async function handleCloseCommand(interaction: ChatInputCommandInteraction) {
   }
   const reason = interaction.options.getString("reason") ?? "スタッフによるクローズ";
   await interaction.reply({ content: `🔒 **${reason}** によりこのチケットをクローズします。`, flags: 64 });
+
+  // Send close log to appropriate channel
+  await sendCloseLog(interaction, ch, reason);
+
   await closeTicketChannel(ch, interaction.user.id, reason);
+}
+
+const SUPPORT_PREFIXES = ["[🐛]", "[🚨]", "[⚖️]", "[❓]"];
+const PURCHASE_PREFIXES = ["[🔔]", "[🎥]"];
+
+async function sendCloseLog(
+  interaction: ChatInputCommandInteraction,
+  ch: TextChannel,
+  reason: string,
+): Promise<void> {
+  const guild = interaction.guild;
+  if (!guild) return;
+
+  const chName = ch.name;
+  const isSupport = SUPPORT_PREFIXES.some((p) => chName.startsWith(p));
+  const isPurchase = PURCHASE_PREFIXES.some((p) => chName.startsWith(p));
+  if (!isSupport && !isPurchase) return; // not a known ticket channel
+
+  const logChannelId = isSupport
+    ? (botConfig.supportLogChannelId || botConfig.ticketLogChannelId)
+    : botConfig.ticketLogChannelId;
+
+  try {
+    const logCh = await guild.channels.fetch(logChannelId);
+    if (!(logCh instanceof TextChannel)) return;
+
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Red)
+      .setTitle("🔒 チケットクローズ")
+      .addFields(
+        { name: "📁 チャンネル", value: `#${ch.name}`, inline: true },
+        { name: "👤 クローズしたスタッフ", value: `<@${interaction.user.id}>`, inline: true },
+        { name: "📝 理由", value: reason, inline: false },
+      )
+      .setTimestamp()
+      .setFooter({ text: `チャンネルID: ${ch.id}` });
+
+    await logCh.send({ embeds: [embed] });
+  } catch (err) {
+    logger.error({ err }, "Failed to send close log");
+  }
 }
 
 async function handleTicketAddCommand(interaction: ChatInputCommandInteraction) {
