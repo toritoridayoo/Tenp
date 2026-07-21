@@ -33,6 +33,8 @@ export async function handleTicketPanelSendCommand(
         "　ルール違反プレイヤーの通報\n\n" +
         "⚖️ **異議申し立て**\n" +
         "　BAN・ミュートなどの処分への異議申し立て\n\n" +
+        "❓ **その他のお問い合わせ**\n" +
+        "　上記に当てはまらないご質問・ご相談\n\n" +
         "> スタッフが確認次第、対応します。"
       )
       .setFooter({ text: "虚偽の報告はペナルティの対象になる場合があります" })
@@ -50,7 +52,11 @@ export async function handleTicketPanelSendCommand(
       new ButtonBuilder()
         .setCustomId("open_appeal_ticket")
         .setLabel("⚖️ 異議申し立て")
-        .setStyle(ButtonStyle.Primary)
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("open_inquiry_ticket")
+        .setLabel("❓ その他")
+        .setStyle(ButtonStyle.Secondary)
     );
 
     await channel.send({ embeds: [embed], components: [row] });

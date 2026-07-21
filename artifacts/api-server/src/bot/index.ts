@@ -28,7 +28,22 @@ const commands = [
     .addChannelOption((o) => o.setName("channel").setDescription("送信先チャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
     .addStringOption((o) => o.setName("title").setDescription("タイトル").setMaxLength(256).setRequired(false))
     .addStringOption((o) => o.setName("description").setDescription("本文").setMaxLength(4096).setRequired(false))
-    .addStringOption((o) => o.setName("color").setDescription("色（例: #FF0000）").setMaxLength(7).setRequired(false))
+    .addStringOption((o) => o.setName("color").setDescription("色").setRequired(false).addChoices(
+      { name: "🔴 赤",       value: "#FF0000" },
+      { name: "🟠 オレンジ", value: "#FF8000" },
+      { name: "🟡 黄",       value: "#FFD700" },
+      { name: "🟢 緑",       value: "#00C800" },
+      { name: "🩵 水色",     value: "#00BFFF" },
+      { name: "🔵 青",       value: "#0055FF" },
+      { name: "🟣 紫",       value: "#8B00FF" },
+      { name: "🩷 ピンク",   value: "#FF69B4" },
+      { name: "⚪ 白",       value: "#FFFFFF" },
+      { name: "⚫ 黒",       value: "#010101" },
+      { name: "🩶 灰色",     value: "#808080" },
+      { name: "🤎 茶色",     value: "#8B4513" },
+      { name: "✨ 金",       value: "#F1C40F" },
+      { name: "🪩 水色（Blurple）", value: "#5865F2" },
+    ))
     .addStringOption((o) => o.setName("image").setDescription("画像URL").setRequired(false))
     .addStringOption((o) => o.setName("thumbnail").setDescription("サムネイルURL").setRequired(false))
     .addStringOption((o) => o.setName("footer").setDescription("フッターテキスト").setMaxLength(2048).setRequired(false))

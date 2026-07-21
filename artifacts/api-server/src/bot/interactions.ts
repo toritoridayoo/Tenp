@@ -21,7 +21,7 @@ import { roleGrantsTable } from "@workspace/db";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panelCommand.js";
-import { handleEmbedCommand, handleShowEmbedCmd } from "./embedCommand.js";
+import { handleEmbedCommand } from "./embedCommand.js";
 import {
   createTicketChannel,
   createKeyTicketChannel,
@@ -29,6 +29,7 @@ import {
   createBugTicketChannel,
   createReportTicketChannel,
   createAppealTicketChannel,
+  createInquiryTicketChannel,
   PRODUCT_LABELS,
   KEY_QUANTITIES,
   type ProductType,
@@ -84,16 +85,13 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   if (customId === "open_media_ticket") { await interaction.showModal(buildMediaModal());  return; }
 
   // Support panel buttons → open modals
-  if (customId === "open_bug_ticket")    { await interaction.showModal(buildBugModal());    return; }
-  if (customId === "open_report_ticket") { await interaction.showModal(buildReportModal()); return; }
-  if (customId === "open_appeal_ticket") { await interaction.showModal(buildAppealModal()); return; }
-
-  // Embed command log button
-  const showEmbedCmdMatch = customId.match(/^show_embed_cmd_(\d+)_(\d+)$/);
-  if (showEmbedCmdMatch) { await handleShowEmbedCmd(interaction, showEmbedCmdMatch[1]!, showEmbedCmdMatch[2]!); return; }
+  if (customId === "open_bug_ticket")     { await interaction.showModal(buildBugModal());     return; }
+  if (customId === "open_report_ticket")  { await interaction.showModal(buildReportModal());  return; }
+  if (customId === "open_appeal_ticket")  { await interaction.showModal(buildAppealModal());  return; }
+  if (customId === "open_inquiry_ticket") { await interaction.showModal(buildInquiryModal()); return; }
 
   // Support ticket close buttons: show reason modal first
-  const closeTicketMatch = customId.match(/^close_ticket_(bug|report|appeal)_(\d+)$/);
+  const closeTicketMatch = customId.match(/^close_ticket_(bug|report|appeal|inquiry)_(\d+)$/);
   if (closeTicketMatch) {
     const member = interaction.member as GuildMember | null;
     if (!isStaff(member)) {
@@ -101,7 +99,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       return;
     }
     await interaction.showModal(buildCloseReasonModal(
-      closeTicketMatch[1] as "bug" | "report" | "appeal",
+      closeTicketMatch[1] as "bug" | "report" | "appeal" | "inquiry",
       closeTicketMatch[2]!,
       interaction.message.id
     ));
@@ -229,8 +227,25 @@ function buildRejectReasonModal(type: "rank" | "key" | "media", targetId: string
   return modal;
 }
 
-function buildCloseReasonModal(type: "bug" | "report" | "appeal", targetId: string, messageId: string): ModalBuilder {
-  const titles = { bug: "🐛 バグ報告を対応済みにする", report: "🚨 通報チケットを対応済みにする", appeal: "⚖️ 異議申し立てを対応済みにする" };
+function buildInquiryModal(): ModalBuilder {
+  const modal = new ModalBuilder().setCustomId("inquiry_modal").setTitle("❓ その他のお問い合わせ");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("inquiry_content_input")
+        .setLabel("お問い合わせ内容")
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder("お問い合わせ内容を詳しく記入してください。")
+        .setMinLength(10)
+        .setMaxLength(1000)
+        .setRequired(true)
+    )
+  );
+  return modal;
+}
+
+function buildCloseReasonModal(type: "bug" | "report" | "appeal" | "inquiry", targetId: string, messageId: string): ModalBuilder {
+  const titles = { bug: "🐛 バグ報告を対応済みにする", report: "🚨 通報チケットを対応済みにする", appeal: "⚖️ 異議申し立てを対応済みにする", inquiry: "❓ お問い合わせを対応済みにする" };
   const modal = new ModalBuilder()
     .setCustomId(`close_reason_modal_${type}_${targetId}_${messageId}`)
     .setTitle(titles[type]);
@@ -323,17 +338,18 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   if (interaction.customId === "key_modal")     { await handleKeyModalSubmit(interaction);    return; }
   if (interaction.customId === "key_add_modal") { await handleKeyAddModalSubmit(interaction); return; }
   if (interaction.customId === "media_modal")   { await handleMediaModalSubmit(interaction);  return; }
-  if (interaction.customId === "bug_modal")     { await handleBugModalSubmit(interaction);    return; }
-  if (interaction.customId === "report_modal")  { await handleReportModalSubmit(interaction); return; }
-  if (interaction.customId === "appeal_modal")  { await handleAppealModalSubmit(interaction); return; }
+  if (interaction.customId === "bug_modal")     { await handleBugModalSubmit(interaction);     return; }
+  if (interaction.customId === "report_modal")  { await handleReportModalSubmit(interaction);  return; }
+  if (interaction.customId === "appeal_modal")  { await handleAppealModalSubmit(interaction);  return; }
+  if (interaction.customId === "inquiry_modal") { await handleInquiryModalSubmit(interaction); return; }
 
   // Reject reason modals: reject_reason_{type}_{userId}_{messageId}
   const rejectModal = interaction.customId.match(/^reject_reason_(rank|key|media)_(\d+)_(\d+)$/);
   if (rejectModal) { await handleRejectReasonSubmit(interaction, rejectModal[1] as "rank" | "key" | "media", rejectModal[2]!, rejectModal[3]!); return; }
 
   // Close reason modals: close_reason_modal_{type}_{userId}_{messageId}
-  const closeModal = interaction.customId.match(/^close_reason_modal_(bug|report|appeal)_(\d+)_(\d+)$/);
-  if (closeModal) { await handleCloseTicket(interaction, closeModal[1] as "bug" | "report" | "appeal", closeModal[2]!, closeModal[3]!); return; }
+  const closeModal = interaction.customId.match(/^close_reason_modal_(bug|report|appeal|inquiry)_(\d+)_(\d+)$/);
+  if (closeModal) { await handleCloseTicket(interaction, closeModal[1] as "bug" | "report" | "appeal" | "inquiry", closeModal[2]!, closeModal[3]!); return; }
 }
 
 // ── Rank modal → product selection ────────────────────────────────────────
@@ -617,9 +633,22 @@ async function handleAppealModalSubmit(interaction: ModalSubmitInteraction) {
 
 // ── Support ticket: close ─────────────────────────────────────────────────
 
+async function handleInquiryModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+  const content = interaction.fields.getTextInputValue("inquiry_content_input").trim();
+  if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
+  try {
+    const channelId = await createInquiryTicketChannel(interaction.guild, interaction.user, content);
+    await interaction.editReply(`✅ お問い合わせチケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
+  } catch (err) {
+    logger.error({ err }, "Failed to create inquiry ticket channel");
+    await interaction.editReply("❌ チケットの作成中にエラーが発生しました。");
+  }
+}
+
 async function handleCloseTicket(
   interaction: ModalSubmitInteraction,
-  type: "bug" | "report" | "appeal",
+  type: "bug" | "report" | "appeal" | "inquiry",
   targetUserId: string,
   messageId: string,
 ) {
@@ -632,7 +661,7 @@ async function handleCloseTicket(
   }
 
   const reason = interaction.fields.getTextInputValue("close_reason_input").trim();
-  const typeLabels = { bug: "バグ報告", report: "プレイヤー通報", appeal: "異議申し立て" };
+  const typeLabels = { bug: "バグ報告", report: "プレイヤー通報", appeal: "異議申し立て", inquiry: "その他のお問い合わせ" };
   const label = typeLabels[type];
   const channel = interaction.channel as TextChannel | null;
 
@@ -664,9 +693,10 @@ async function handleCloseTicket(
     const targetMember = await (interaction.guild as Guild).members.fetch(targetUserId).catch(() => null);
     if (targetMember) {
       const dmMessages: Record<string, string> = {
-        bug:    "ご報告いただいたバグについて、スタッフが対応を完了しました。ご協力ありがとうございました。",
-        report: "ご通報いただいた内容について、スタッフが確認・対応を完了しました。ご協力ありがとうございました。",
-        appeal: "異議申し立ての内容について、スタッフが確認・対応を完了しました。ご不明な点があればお気軽にお問い合わせください。",
+        bug:     "ご報告いただいたバグについて、スタッフが対応を完了しました。ご協力ありがとうございました。",
+        report:  "ご通報いただいた内容について、スタッフが確認・対応を完了しました。ご協力ありがとうございました。",
+        appeal:  "異議申し立ての内容について、スタッフが確認・対応を完了しました。ご不明な点があればお気軽にお問い合わせください。",
+        inquiry: "お問い合わせいただいた内容について、スタッフが確認・対応を完了しました。ご不明な点があればお気軽にお問い合わせください。",
       };
       const dmEmbed = new EmbedBuilder()
         .setColor(Colors.Green)

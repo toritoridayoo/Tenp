@@ -425,6 +425,55 @@ export async function createAppealTicketChannel(
   return ticketChannel.id;
 }
 
+// ── Inquiry ticket ────────────────────────────────────────────────────────
+
+export async function createInquiryTicketChannel(
+  guild: Guild,
+  user: User,
+  content: string
+): Promise<string> {
+  const safeUsername = user.username.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 16) || "user";
+  const ticketChannel = await guild.channels.create({
+    name: `[❓]お問い合わせ-${safeUsername}`,
+    type: ChannelType.GuildText,
+    parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
+    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+  });
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`close_ticket_inquiry_${user.id}`)
+      .setLabel("✅ 対応済み（クローズ）")
+      .setStyle(ButtonStyle.Success)
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor(Colors.Yellow)
+    .setTitle("❓ その他のお問い合わせチケット")
+    .setDescription(`<@${user.id}> からお問い合わせが届きました。\nスタッフは確認・対応後、クローズしてください。`)
+    .addFields(
+      { name: "👤 申請者", value: `<@${user.id}> (${user.tag})`, inline: true },
+      { name: "📝 お問い合わせ内容", value: content, inline: false }
+    )
+    .setTimestamp()
+    .setFooter({ text: `ユーザーID: ${user.id}` });
+
+  await ticketChannel.send({
+    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    embeds: [embed],
+    components: [row],
+  });
+
+  await sendSupportTicketLog(guild, user, [
+    { name: "📂 種別", value: "その他のお問い合わせ", inline: true },
+    { name: "📝 内容", value: content, inline: false },
+    { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
+  ]);
+
+  logger.info({ userId: user.id, channelId: ticketChannel.id }, "Inquiry ticket created");
+  return ticketChannel.id;
+}
+
 // ── Log helpers ───────────────────────────────────────────────────────────
 
 async function sendSupportTicketLog(
