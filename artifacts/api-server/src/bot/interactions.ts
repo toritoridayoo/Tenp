@@ -21,7 +21,7 @@ import { roleGrantsTable } from "@workspace/db";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panelCommand.js";
-import { handleEmbedCommand, handleShowEmbedCmd } from "./embedCommand.js";
+import { handleEmbedCommand } from "./embedCommand.js";
 import {
   createTicketChannel,
   createKeyTicketChannel,
@@ -111,10 +111,6 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
 
   // Grant complete
   if (customId.startsWith("grant_complete_")) { await handleGrantComplete(interaction); return; }
-
-  // Embed command copy button
-  const showEmbedCmdMatch = customId.match(/^show_embed_cmd_(\d+)$/);
-  if (showEmbedCmdMatch) { await handleShowEmbedCmd(interaction, showEmbedCmdMatch[1]!); return; }
 
   // User receipt confirmation (only ticket creator can press)
   if (customId.startsWith("user_receipt_")) {
