@@ -72,7 +72,14 @@ export async function handleTicketPanelSendCommand(
         .setStyle(ButtonStyle.Secondary)
     );
 
-    await channel.send({ embeds: [embed], components: [row] });
+    const staffRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("staff_apply")
+        .setLabel("📋 スタッフ応募")
+        .setStyle(ButtonStyle.Success)
+    );
+
+    await channel.send({ embeds: [embed], components: [row, staffRow] });
     await interaction.editReply(`✅ <#${channel.id}> にサポートパネルを送信しました！`);
     logger.info({ channelId: channel.id }, "Support ticket panel sent");
   } catch (err) {

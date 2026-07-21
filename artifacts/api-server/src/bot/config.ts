@@ -9,6 +9,8 @@ export const botConfig = {
   ticketLogChannelId:           process.env["DISCORD_TICKET_LOG_CHANNEL_ID"] ?? "",
   supportLogChannelId:          process.env["DISCORD_SUPPORT_LOG_CHANNEL_ID"] ?? "",
   approvalChannelId:            process.env["DISCORD_APPROVAL_CHANNEL_ID"] ?? "",
+  staffAppChannelId:            "1520467601292001423",
+  staffInterviewChannelId:      "1498169160226836620",
 };
 
 export function validateBotConfig(): boolean {

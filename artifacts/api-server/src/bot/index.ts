@@ -1,11 +1,13 @@
 import {
   Client,
   GatewayIntentBits,
+  Partials,
   REST,
   Routes,
   SlashCommandBuilder,
   ChannelType,
 } from "discord.js";
+import { handleDmMessage } from "./staffApplication.js";
 import { logger } from "../lib/logger.js";
 import { botConfig, validateBotConfig } from "./config.js";
 import { handleInteraction } from "./interactions.js";
@@ -76,7 +78,11 @@ export async function startBot(): Promise<void> {
   }
 
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds],
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.DirectMessages,
+    ],
+    partials: [Partials.Channel],
   });
 
   client.once("clientReady", async (readyClient) => {
@@ -87,6 +93,10 @@ export async function startBot(): Promise<void> {
 
   client.on("interactionCreate", (interaction) => {
     void handleInteraction(interaction);
+  });
+
+  client.on("messageCreate", (message) => {
+    void handleDmMessage(message, client);
   });
 
   client.on("error", (err) => {

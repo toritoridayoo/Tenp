@@ -21,6 +21,13 @@ import { roleGrantsTable } from "@workspace/db";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panelCommand.js";
+import {
+  handleStaffApplyButton,
+  handleStaffApplyYes,
+  handleStaffApplyNo,
+  handleStaffApprove,
+  handleStaffReject,
+} from "./staffApplication.js";
 import { handleEmbedCommand } from "./embedCommand.js";
 import {
   createTicketChannel,
@@ -83,6 +90,15 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   if (customId === "open_ticket")       { await interaction.showModal(buildRankModal());   return; }
   if (customId === "open_key_ticket")   { await interaction.showModal(buildKeyModal());    return; }
   if (customId === "open_media_ticket") { await interaction.showModal(buildMediaModal());  return; }
+
+  // Staff application buttons
+  if (customId === "staff_apply")     { await handleStaffApplyButton(interaction); return; }
+  if (customId === "staff_apply_yes") { await handleStaffApplyYes(interaction);   return; }
+  if (customId === "staff_apply_no")  { await handleStaffApplyNo(interaction);    return; }
+  const staffApproveMatch = customId.match(/^staff_approve_(\d+)$/);
+  const staffRejectMatch  = customId.match(/^staff_reject_(\d+)$/);
+  if (staffApproveMatch) { await handleStaffApprove(interaction, staffApproveMatch[1]!); return; }
+  if (staffRejectMatch)  { await handleStaffReject(interaction, staffRejectMatch[1]!);  return; }
 
   // Support panel buttons → open modals
   if (customId === "open_bug_ticket")     { await interaction.showModal(buildBugModal());     return; }
