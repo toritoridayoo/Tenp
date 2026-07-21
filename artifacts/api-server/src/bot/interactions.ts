@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
+  ChatInputCommandInteraction,
   Colors,
   EmbedBuilder,
   Guild,
@@ -67,6 +68,7 @@ export async function handleInteraction(interaction: Interaction) {
     if (interaction.commandName === "purchase_send")    await handlePurchaseSendCommand(interaction);
     if (interaction.commandName === "ticketpanel_send") await handleTicketPanelSendCommand(interaction);
     if (interaction.commandName === "embed")            await handleEmbedCommand(interaction);
+    if (interaction.commandName === "close")            await handleCloseCommand(interaction);
     return;
   }
   if (interaction.isButton()) {
@@ -1110,6 +1112,22 @@ async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: str
   } catch (err) {
     logger.error({ err }, "Failed to send reject log");
   }
+}
+
+async function handleCloseCommand(interaction: ChatInputCommandInteraction) {
+  const member = interaction.member as GuildMember | null;
+  if (!isStaff(member)) {
+    await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
+    return;
+  }
+  const ch = interaction.channel;
+  if (!(ch instanceof TextChannel)) {
+    await interaction.reply({ content: "❌ テキストチャンネルで使用してください。", flags: 64 });
+    return;
+  }
+  const reason = interaction.options.getString("reason") ?? "スタッフによるクローズ";
+  await interaction.reply({ content: `🔒 **${reason}** によりこのチケットをクローズします。`, flags: 64 });
+  await closeTicketChannel(ch, interaction.user.id, reason);
 }
 
 async function closeTicketChannel(channel: TextChannel | null, targetUserId: string, reason: string) {

@@ -25,6 +25,11 @@ const commands = [
     .addChannelOption((o) => o.setName("channel").setDescription("パネルを送信するテキストチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
     .toJSON(),
   new SlashCommandBuilder()
+    .setName("close")
+    .setDescription("現在のチケットチャンネルをクローズします（スタッフ専用）")
+    .addStringOption((o) => o.setName("reason").setDescription("クローズ理由（任意）").setMaxLength(200).setRequired(false))
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName("embed")
     .setDescription("Embedメッセージを現在のチャンネルに送信します（スタッフ専用）")
     .addStringOption((o) => o.setName("title").setDescription("タイトル").setMaxLength(256).setRequired(false))
