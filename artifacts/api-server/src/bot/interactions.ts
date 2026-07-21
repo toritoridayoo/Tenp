@@ -86,9 +86,21 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   if (customId === "open_report_ticket") { await interaction.showModal(buildReportModal()); return; }
   if (customId === "open_appeal_ticket") { await interaction.showModal(buildAppealModal()); return; }
 
-  // Support ticket close buttons
+  // Support ticket close buttons: show reason modal first
   const closeTicketMatch = customId.match(/^close_ticket_(bug|report|appeal)_(\d+)$/);
-  if (closeTicketMatch) { await handleCloseTicket(interaction, closeTicketMatch[1] as "bug" | "report" | "appeal", closeTicketMatch[2]!); return; }
+  if (closeTicketMatch) {
+    const member = interaction.member as GuildMember | null;
+    if (!isStaff(member)) {
+      await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
+      return;
+    }
+    await interaction.showModal(buildCloseReasonModal(
+      closeTicketMatch[1] as "bug" | "report" | "appeal",
+      closeTicketMatch[2]!,
+      interaction.message.id
+    ));
+    return;
+  }
 
   // Rank product selection
   if (customId.startsWith("product_")) { await handleProductSelection(interaction); return; }
@@ -211,6 +223,25 @@ function buildRejectReasonModal(type: "rank" | "key" | "media", targetId: string
   return modal;
 }
 
+function buildCloseReasonModal(type: "bug" | "report" | "appeal", targetId: string, messageId: string): ModalBuilder {
+  const titles = { bug: "🐛 バグ報告を対応済みにする", report: "🚨 通報チケットを対応済みにする", appeal: "⚖️ 異議申し立てを対応済みにする" };
+  const modal = new ModalBuilder()
+    .setCustomId(`close_reason_modal_${type}_${targetId}_${messageId}`)
+    .setTitle(titles[type]);
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("close_reason_input")
+        .setLabel("対応内容・メモ（任意）")
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder("例: 確認しました。次回から気をつけてください。\n※空欄でも送信できます。")
+        .setMaxLength(500)
+        .setRequired(false)
+    )
+  );
+  return modal;
+}
+
 function buildBugModal(): ModalBuilder {
   const modal = new ModalBuilder().setCustomId("bug_modal").setTitle("🐛 バグ報告");
   modal.addComponents(
@@ -293,6 +324,10 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   // Reject reason modals: reject_reason_{type}_{userId}_{messageId}
   const rejectModal = interaction.customId.match(/^reject_reason_(rank|key|media)_(\d+)_(\d+)$/);
   if (rejectModal) { await handleRejectReasonSubmit(interaction, rejectModal[1] as "rank" | "key" | "media", rejectModal[2]!, rejectModal[3]!); return; }
+
+  // Close reason modals: close_reason_modal_{type}_{userId}_{messageId}
+  const closeModal = interaction.customId.match(/^close_reason_modal_(bug|report|appeal)_(\d+)_(\d+)$/);
+  if (closeModal) { await handleCloseTicket(interaction, closeModal[1] as "bug" | "report" | "appeal", closeModal[2]!, closeModal[3]!); return; }
 }
 
 // ── Rank modal → product selection ────────────────────────────────────────
@@ -577,34 +612,47 @@ async function handleAppealModalSubmit(interaction: ModalSubmitInteraction) {
 // ── Support ticket: close ─────────────────────────────────────────────────
 
 async function handleCloseTicket(
-  interaction: ButtonInteraction,
+  interaction: ModalSubmitInteraction,
   type: "bug" | "report" | "appeal",
   targetUserId: string,
+  messageId: string,
 ) {
   await interaction.deferReply({ flags: 64 });
 
   const member = interaction.member as GuildMember | null;
   if (!isStaff(member)) {
-    await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ押せます。");
+    await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ操作できます。");
     return;
   }
 
+  const reason = interaction.fields.getTextInputValue("close_reason_input").trim();
   const typeLabels = { bug: "バグ報告", report: "プレイヤー通報", appeal: "異議申し立て" };
   const label = typeLabels[type];
+  const channel = interaction.channel as TextChannel | null;
 
   try {
-    await interaction.message.edit({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(Colors.DarkGreen)
-          .setTitle(`✅ 対応済み — ${label}チケット終了`)
-          .addFields(
-            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
-            { name: "✅ 対応スタッフ", value: `<@${interaction.user.id}>`, inline: true }
-          ).setTimestamp()
-      ],
-      components: [],
-    });
+    // Update ticket message
+    if (channel) {
+      const ticketMsg = await channel.messages.fetch(messageId).catch(() => null);
+      if (ticketMsg) {
+        const fields: { name: string; value: string; inline: boolean }[] = [
+          { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
+          { name: "✅ 対応スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+        ];
+        if (reason) fields.push({ name: "📝 対応内容", value: reason, inline: false });
+
+        await ticketMsg.edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(Colors.DarkGreen)
+              .setTitle(`✅ 対応済み — ${label}チケット終了`)
+              .addFields(...fields)
+              .setTimestamp()
+          ],
+          components: [],
+        });
+      }
+    }
 
     // DM the user
     const targetMember = await (interaction.guild as Guild).members.fetch(targetUserId).catch(() => null);
@@ -614,17 +662,18 @@ async function handleCloseTicket(
         report: "ご通報いただいた内容について、スタッフが確認・対応を完了しました。ご協力ありがとうございました。",
         appeal: "異議申し立ての内容について、スタッフが確認・対応を完了しました。ご不明な点があればお気軽にお問い合わせください。",
       };
-      await sendDM(targetMember, new EmbedBuilder()
+      const dmEmbed = new EmbedBuilder()
         .setColor(Colors.Green)
         .setTitle(`✅ ${label}チケットが対応済みになりました`)
         .setDescription(dmMessages[type]!)
-        .setTimestamp()
-      );
+        .setTimestamp();
+      if (reason) dmEmbed.addFields({ name: "📝 スタッフからのメモ", value: reason, inline: false });
+      await sendDM(targetMember, dmEmbed);
     }
 
-    await closeTicketChannel(interaction.channel as TextChannel | null, targetUserId, "対応済み");
-    await interaction.editReply(`✅ チケットを対応済みとしてクローズしました。`);
-    logger.info({ targetUserId, type, closedBy: interaction.user.id }, "Support ticket closed");
+    await closeTicketChannel(channel, targetUserId, "対応済み");
+    await interaction.editReply("✅ チケットを対応済みとしてクローズしました。");
+    logger.info({ targetUserId, type, reason: reason || null, closedBy: interaction.user.id }, "Support ticket closed");
   } catch (err) {
     logger.error({ err }, "Failed to close support ticket");
     await interaction.editReply("❌ クローズ処理中にエラーが発生しました。");
