@@ -21,6 +21,7 @@ import { roleGrantsTable } from "@workspace/db";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panelCommand.js";
+import { handleEmbedCommand, handleShowEmbedCmd } from "./embedCommand.js";
 import {
   createTicketChannel,
   createKeyTicketChannel,
@@ -55,6 +56,7 @@ export async function handleInteraction(interaction: Interaction) {
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === "purchase_send")    await handlePurchaseSendCommand(interaction);
     if (interaction.commandName === "ticketpanel_send") await handleTicketPanelSendCommand(interaction);
+    if (interaction.commandName === "embed")            await handleEmbedCommand(interaction);
     return;
   }
   if (interaction.isButton()) {
@@ -85,6 +87,10 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   if (customId === "open_bug_ticket")    { await interaction.showModal(buildBugModal());    return; }
   if (customId === "open_report_ticket") { await interaction.showModal(buildReportModal()); return; }
   if (customId === "open_appeal_ticket") { await interaction.showModal(buildAppealModal()); return; }
+
+  // Embed command log button
+  const showEmbedCmdMatch = customId.match(/^show_embed_cmd_(\d+)_(\d+)$/);
+  if (showEmbedCmdMatch) { await handleShowEmbedCmd(interaction, showEmbedCmdMatch[1]!, showEmbedCmdMatch[2]!); return; }
 
   // Support ticket close buttons: show reason modal first
   const closeTicketMatch = customId.match(/^close_ticket_(bug|report|appeal)_(\d+)$/);
@@ -724,7 +730,7 @@ async function handleRankApprove(
       components: [],
     });
 
-    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id);
+    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id, 0x00BFFF);
     await sendDM(targetMember, new EmbedBuilder()
       .setColor(Colors.Green).setTitle("✅ ロール申請が承認されました")
       .setDescription(`あなたのロール申請が承認されました！`)
@@ -824,7 +830,7 @@ async function handleKeyApprove(interaction: ButtonInteraction, targetUserId: st
       components: [],
     });
 
-    await sendKeyApprovalNotification(interaction.guild as Guild, targetUserId, mcid ?? "不明", interaction.message.embeds[0]!.fields, interaction.user.id);
+    await sendKeyApprovalNotification(interaction.guild as Guild, targetUserId, mcid ?? "不明", interaction.message.embeds[0]!.fields, interaction.user.id, 0x00BFFF);
     const keyTargetMember = await (interaction.guild as Guild).members.fetch(targetUserId).catch(() => null);
     if (keyTargetMember) {
       const itemSummary = interaction.message.embeds[0]!.fields
@@ -883,7 +889,7 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
       components: [],
     });
 
-    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", "メディアランク 📺", false, expiresAt, interaction.user.id);
+    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", "メディアランク 📺", false, expiresAt, interaction.user.id, Colors.Red);
     await sendDM(targetMember, new EmbedBuilder()
       .setColor(Colors.Green).setTitle("✅ メディアランク申請が承認されました")
       .setDescription("あなたのメディアランク申請が承認されました！")
@@ -935,13 +941,13 @@ async function handleGrantComplete(interaction: ButtonInteraction) {
 
 async function sendApprovalNotification(
   guild: Guild, targetUserId: string, mcid: string, productLabel: string,
-  permanent: boolean, expiresAt: Date | null, approvedBy: string
+  permanent: boolean, expiresAt: Date | null, approvedBy: string, color: number = Colors.Gold
 ) {
   try {
     const ch = await guild.channels.fetch(botConfig.approvalChannelId);
     if (!ch || !(ch instanceof TextChannel)) return;
 
-    const embed = new EmbedBuilder().setColor(Colors.Gold)
+    const embed = new EmbedBuilder().setColor(color)
       .setTitle("🎮 ロール付与 — ゲーム内反映確認")
       .setDescription(`<@${targetUserId}> が承認されました。ゲーム内でランクを付与後、下のボタンを押してください。`)
       .addFields(
@@ -964,13 +970,13 @@ async function sendApprovalNotification(
 
 async function sendKeyApprovalNotification(
   guild: Guild, targetUserId: string, mcid: string,
-  itemFields: { name: string; value: string }[], approvedBy: string
+  itemFields: { name: string; value: string }[], approvedBy: string, color: number = Colors.Gold
 ) {
   try {
     const ch = await guild.channels.fetch(botConfig.approvalChannelId);
     if (!ch || !(ch instanceof TextChannel)) return;
 
-    const embed = new EmbedBuilder().setColor(Colors.Gold)
+    const embed = new EmbedBuilder().setColor(color)
       .setTitle("🔑 鍵・シャード付与 — ゲーム内反映確認")
       .setDescription(`<@${targetUserId}> への鍵・シャード付与が承認されました。ゲーム内で付与後、下のボタンを押してください。`)
       .addFields(

@@ -278,7 +278,7 @@ export async function createBugTicketChannel(
   const ticketChannel = await guild.channels.create({
     name: `[🐛]バグ報告-${safeMcid}`,
     type: ChannelType.GuildText,
-    parent: botConfig.ticketChannelId,
+    parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
   });
 
@@ -331,7 +331,7 @@ export async function createReportTicketChannel(
   const ticketChannel = await guild.channels.create({
     name: `[🚨]プレイヤー通報-${safeMcid}`,
     type: ChannelType.GuildText,
-    parent: botConfig.ticketChannelId,
+    parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
   });
 
@@ -385,7 +385,7 @@ export async function createAppealTicketChannel(
   const ticketChannel = await guild.channels.create({
     name: `[⚖️]異議申し立て-${safeMcid}`,
     type: ChannelType.GuildText,
-    parent: botConfig.ticketChannelId,
+    parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
   });
 

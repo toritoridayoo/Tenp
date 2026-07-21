@@ -22,6 +22,17 @@ const commands = [
     .setDescription("サポートチケットパネルを指定チャンネルに送信します（スタッフ専用）")
     .addChannelOption((o) => o.setName("channel").setDescription("パネルを送信するテキストチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName("embed")
+    .setDescription("Embedメッセージを作成して指定チャンネルに送信します（スタッフ専用）")
+    .addChannelOption((o) => o.setName("channel").setDescription("送信先チャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
+    .addStringOption((o) => o.setName("title").setDescription("タイトル").setMaxLength(256).setRequired(false))
+    .addStringOption((o) => o.setName("description").setDescription("本文").setMaxLength(4096).setRequired(false))
+    .addStringOption((o) => o.setName("color").setDescription("色（例: #FF0000）").setMaxLength(7).setRequired(false))
+    .addStringOption((o) => o.setName("image").setDescription("画像URL").setRequired(false))
+    .addStringOption((o) => o.setName("thumbnail").setDescription("サムネイルURL").setRequired(false))
+    .addStringOption((o) => o.setName("footer").setDescription("フッターテキスト").setMaxLength(2048).setRequired(false))
+    .toJSON(),
 ];
 
 async function registerCommands(token: string, clientId: string) {
