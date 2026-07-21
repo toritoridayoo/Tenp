@@ -33,32 +33,33 @@ export const KEY_QUANTITIES: Record<string, number[]> = {
 
 // ── Permission helper ─────────────────────────────────────────────────────
 
+const ALLOW_ALL = [
+  PermissionFlagsBits.ViewChannel,
+  PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.ReadMessageHistory,
+  PermissionFlagsBits.AttachFiles,
+] as const;
+
 function buildPermissionOverwrites(guild: Guild, userId: string) {
   return [
-    {
-      id: guild.id,
-      deny: [PermissionFlagsBits.ViewChannel],
-    },
-    {
-      id: userId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles,
-      ],
-    },
-    {
-      id: botConfig.staffRoleId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles,
-      ],
-    },
+    { id: guild.id,               deny:  ALLOW_ALL },
+    { id: userId,                  allow: ALLOW_ALL },
+    { id: botConfig.staffRoleId,   allow: ALLOW_ALL },
   ];
 }
+
+function buildSupportPermissionOverwrites(guild: Guild, userId: string) {
+  return [
+    { id: guild.id,                   deny:  ALLOW_ALL },
+    { id: userId,                      allow: ALLOW_ALL },
+    { id: botConfig.staffRoleId,       allow: ALLOW_ALL },
+    { id: botConfig.subStaffRoleId,    allow: ALLOW_ALL },
+    { id: botConfig.staffHireRoleId,   allow: ALLOW_ALL },
+  ];
+}
+
+const SUPPORT_MENTION = () =>
+  `<@&${botConfig.subStaffRoleId}> <@&${botConfig.staffHireRoleId}>`;
 
 // ── Rank ticket ───────────────────────────────────────────────────────────
 
@@ -279,7 +280,7 @@ export async function createBugTicketChannel(
     name: `[🐛]バグ報告-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
-    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -302,7 +303,7 @@ export async function createBugTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    content: `<@${user.id}> ${SUPPORT_MENTION()}`,
     embeds: [embed],
     components: [row],
   });
@@ -332,7 +333,7 @@ export async function createReportTicketChannel(
     name: `[🚨]プレイヤー通報-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
-    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -356,7 +357,7 @@ export async function createReportTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    content: `<@${user.id}> ${SUPPORT_MENTION()}`,
     embeds: [embed],
     components: [row],
   });
@@ -386,7 +387,7 @@ export async function createAppealTicketChannel(
     name: `[⚖️]異議申し立て-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
-    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -409,7 +410,7 @@ export async function createAppealTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    content: `<@${user.id}> ${SUPPORT_MENTION()}`,
     embeds: [embed],
     components: [row],
   });
@@ -437,7 +438,7 @@ export async function createInquiryTicketChannel(
     name: `[❓]お問い合わせ-${safeUsername}`,
     type: ChannelType.GuildText,
     parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
-    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -459,7 +460,7 @@ export async function createInquiryTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    content: `<@${user.id}> ${SUPPORT_MENTION()}`,
     embeds: [embed],
     components: [row],
   });
