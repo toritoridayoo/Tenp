@@ -3,12 +3,15 @@ import {
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
+  ChannelType,
   Client,
   Colors,
   DMChannel,
   EmbedBuilder,
   GuildMember,
   Message,
+  OverwriteType,
+  PermissionFlagsBits,
   TextChannel,
 } from "discord.js";
 import { botConfig } from "./config.js";
@@ -175,7 +178,7 @@ async function submitApplication(
 
     const fields = APPLICATION_QUESTIONS.map((q, i) => ({
       name: `Q${i + 1}. ${q}`,
-      value: state.answers[i] ?? "（未回答）",
+      value: `\n${state.answers[i] ?? "（未回答）"}`,
       inline: false,
     }));
 
@@ -225,9 +228,21 @@ export async function handleStaffApprove(
     .setTitle("✅ 承認済み");
   await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
 
-  // Send message to interview channel
-  const interviewCh = await interaction.client.channels.fetch(botConfig.staffInterviewChannelId).catch(() => null);
-  if (interviewCh instanceof TextChannel) {
+  // Create interview channel in category
+  const guild = await interaction.client.guilds.fetch(botConfig.guildId).catch(() => null);
+  if (guild) {
+    const applicantUser = await interaction.client.users.fetch(applicantUserId).catch(() => null);
+    const interviewCh = await guild.channels.create({
+      name: `面接-${applicantUser?.username ?? applicantUserId}`,
+      type: ChannelType.GuildText,
+      parent: botConfig.staffInterviewChannelId,
+      permissionOverwrites: [
+        { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel], type: OverwriteType.Role },
+        { id: applicantUserId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], type: OverwriteType.Member },
+        { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], type: OverwriteType.Member },
+        { id: botConfig.staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], type: OverwriteType.Role },
+      ],
+    });
     await interviewCh.send({
       content: `<@${applicantUserId}> スタッフ応募が承認されました！面接を開始します。\n担当スタッフ: <@${interaction.user.id}>`,
     });
