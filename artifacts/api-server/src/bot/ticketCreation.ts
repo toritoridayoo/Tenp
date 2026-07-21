@@ -72,7 +72,7 @@ export async function createTicketChannel(
 ): Promise<string> {
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `🔔ランク受け取り-${safeMcid}`,
+    name: `［🔔］ランク受け取り-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
@@ -137,7 +137,7 @@ export async function createKeyTicketChannel(
 ): Promise<string> {
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `🔔鍵・シャード受け取り-${safeMcid}`,
+    name: `［🔔］鍵・シャード受け取り-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
@@ -207,7 +207,7 @@ export async function createMediaTicketChannel(
 ): Promise<string> {
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `🎥メディアランク申請-${safeMcid}`,
+    name: `［🎥］メディアランク申請-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.ticketChannelId,
     permissionOverwrites: buildPermissionOverwrites(guild, user.id),
@@ -277,7 +277,7 @@ export async function createBugTicketChannel(
 ): Promise<string> {
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `🐛バグ報告-${safeMcid}`,
+    name: `［🐛］バグ報告-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
     permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
@@ -330,7 +330,7 @@ export async function createReportTicketChannel(
 ): Promise<string> {
   const safeMcid = ownMcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `🚨プレイヤー通報-${safeMcid}`,
+    name: `［🚨］プレイヤー通報-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
     permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
@@ -384,7 +384,7 @@ export async function createAppealTicketChannel(
 ): Promise<string> {
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
-    name: `⚖️異議申し立て-${safeMcid}`,
+    name: `［⚖️］異議申し立て-${safeMcid}`,
     type: ChannelType.GuildText,
     parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
     permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
@@ -435,7 +435,7 @@ export async function createInquiryTicketChannel(
 ): Promise<string> {
   const safeUsername = user.username.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 16) || "user";
   const ticketChannel = await guild.channels.create({
-    name: `❓お問い合わせ-${safeUsername}`,
+    name: `［❓］お問い合わせ-${safeUsername}`,
     type: ChannelType.GuildText,
     parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
     permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
