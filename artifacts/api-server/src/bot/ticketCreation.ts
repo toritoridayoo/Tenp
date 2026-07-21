@@ -145,7 +145,7 @@ export async function createKeyTicketChannel(
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`key_approve_${user.id}`)
-      .setLabel("✅ 付与済み")
+      .setLabel("✅ 確認完了")
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId(`key_reject_${user.id}`)

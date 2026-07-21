@@ -860,7 +860,7 @@ async function handleKeyApprove(interaction: ButtonInteraction, targetUserId: st
 
     await interaction.message.edit({
       embeds: [
-        new EmbedBuilder().setColor(Colors.Green).setTitle("✅ 付与済み — チケット終了")
+        new EmbedBuilder().setColor(Colors.Green).setTitle("✅ 確認完了 — チケット終了")
           .addFields(
             { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
             { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``, inline: true },
