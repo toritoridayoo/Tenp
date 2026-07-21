@@ -11,6 +11,7 @@ export const botConfig = {
   approvalChannelId:            process.env["DISCORD_APPROVAL_CHANNEL_ID"] ?? "",
   staffAppChannelId:            "1520467601292001423",
   staffInterviewChannelId:      "1498169160226836620",
+  staffHireRoleId:              "1511371988885831830",
 };
 
 export function validateBotConfig(): boolean {

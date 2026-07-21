@@ -177,7 +177,7 @@ async function submitApplication(
     const mention = modRole ? `<@&${modRole.id}>` : "@toritorismpmod";
 
     const fields = APPLICATION_QUESTIONS.map((q, i) => ({
-      name: `Q${i + 1}. ${q}`,
+      name: `**Q${i + 1}. ${q}**`,
       value: `\n${state.answers[i] ?? "（未回答）"}`,
       inline: false,
     }));
@@ -237,12 +237,26 @@ export async function handleStaffApprove(
       type: ChannelType.GuildText,
       parent: botConfig.staffInterviewChannelId,
       permissionOverwrites: [
-        { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel], type: OverwriteType.Role },
-        { id: applicantUserId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], type: OverwriteType.Member },
-        { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], type: OverwriteType.Member },
-        { id: botConfig.staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], type: OverwriteType.Role },
+        { id: guild.roles.everyone,          deny:  [PermissionFlagsBits.ViewChannel], type: OverwriteType.Role },
+        { id: botConfig.staffRoleId,         allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], type: OverwriteType.Role },
+        { id: botConfig.subStaffRoleId,      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], type: OverwriteType.Role },
+        { id: applicantUserId,               allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], type: OverwriteType.Member },
+        { id: interaction.user.id,           allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], type: OverwriteType.Member },
       ],
     });
+
+    // ① 採用/不採用 embed を最初に送信
+    const decisionEmbed = new EmbedBuilder()
+      .setColor(Colors.Blurple)
+      .setTitle("🎤 面接 — 採用判定")
+      .setDescription(`応募者: <@${applicantUserId}>\n\n面接終了後、下のボタンで採用・不採用を選択してください。`);
+    const decisionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`interview_hire_${applicantUserId}`).setLabel("✅ 採用").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`interview_reject_${applicantUserId}`).setLabel("❌ 不採用").setStyle(ButtonStyle.Danger),
+    );
+    await interviewCh.send({ embeds: [decisionEmbed], components: [decisionRow] });
+
+    // ② 開始メッセージ
     await interviewCh.send({
       content: `<@${applicantUserId}> スタッフ応募が承認されました！面接を開始します。\n担当スタッフ: <@${interaction.user.id}>`,
     });
@@ -261,6 +275,85 @@ export async function handleStaffApprove(
   } catch { /* DM disabled — ignore */ }
 
   await interaction.editReply("✅ 承認しました。");
+}
+
+// ── 8. Interview hire ─────────────────────────────────────────────────────────
+
+export async function handleInterviewHire(
+  interaction: ButtonInteraction,
+  applicantUserId: string,
+): Promise<void> {
+  const member = interaction.member as GuildMember | null;
+  if (!member?.roles.cache.has(botConfig.staffRoleId) &&
+      !member?.roles.cache.has(botConfig.subStaffRoleId)) {
+    await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
+    return;
+  }
+
+  await interaction.deferReply({ flags: 64 });
+
+  // Update embed
+  const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0]!)
+    .setColor(Colors.Green)
+    .setTitle("✅ 採用済み");
+  await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
+
+  // Grant hire role
+  const guild = await interaction.client.guilds.fetch(botConfig.guildId).catch(() => null);
+  if (guild) {
+    const applicantMember = await guild.members.fetch(applicantUserId).catch(() => null);
+    await applicantMember?.roles.add(botConfig.staffHireRoleId).catch(() => null);
+  }
+
+  // DM applicant
+  try {
+    const user = await interaction.client.users.fetch(applicantUserId);
+    const dmCh = await user.createDM();
+    await dmCh.send({
+      embeds: [new EmbedBuilder()
+        .setColor(Colors.Green)
+        .setTitle("🎉 採用決定")
+        .setDescription("面接の結果、採用が決定しました！スタッフとしてよろしくお願いします。")],
+    });
+  } catch { /* DM disabled — ignore */ }
+
+  await interaction.editReply("✅ 採用しました。ロールを付与しました。");
+}
+
+// ── 9. Interview reject ───────────────────────────────────────────────────────
+
+export async function handleInterviewReject(
+  interaction: ButtonInteraction,
+  applicantUserId: string,
+): Promise<void> {
+  const member = interaction.member as GuildMember | null;
+  if (!member?.roles.cache.has(botConfig.staffRoleId) &&
+      !member?.roles.cache.has(botConfig.subStaffRoleId)) {
+    await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
+    return;
+  }
+
+  await interaction.deferReply({ flags: 64 });
+
+  // Update embed
+  const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0]!)
+    .setColor(Colors.Red)
+    .setTitle("❌ 不採用");
+  await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
+
+  // DM applicant
+  try {
+    const user = await interaction.client.users.fetch(applicantUserId);
+    const dmCh = await user.createDM();
+    await dmCh.send({
+      embeds: [new EmbedBuilder()
+        .setColor(Colors.Red)
+        .setTitle("❌ 面接結果 — 不採用")
+        .setDescription("面接の結果、今回は採用を見送らせていただきました。ご参加いただきありがとうございました。")],
+    });
+  } catch { /* DM disabled — ignore */ }
+
+  await interaction.editReply("❌ 不採用にしました。");
 }
 
 // ── 7. Reject ─────────────────────────────────────────────────────────────────

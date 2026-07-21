@@ -27,6 +27,8 @@ import {
   handleStaffApplyNo,
   handleStaffApprove,
   handleStaffReject,
+  handleInterviewHire,
+  handleInterviewReject,
 } from "./staffApplication.js";
 import { handleEmbedCommand } from "./embedCommand.js";
 import {
@@ -99,6 +101,10 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   const staffRejectMatch  = customId.match(/^staff_reject_(\d+)$/);
   if (staffApproveMatch) { await handleStaffApprove(interaction, staffApproveMatch[1]!); return; }
   if (staffRejectMatch)  { await handleStaffReject(interaction, staffRejectMatch[1]!);  return; }
+  const interviewHireMatch   = customId.match(/^interview_hire_(\d+)$/);
+  const interviewRejectMatch = customId.match(/^interview_reject_(\d+)$/);
+  if (interviewHireMatch)   { await handleInterviewHire(interaction, interviewHireMatch[1]!);     return; }
+  if (interviewRejectMatch) { await handleInterviewReject(interaction, interviewRejectMatch[1]!); return; }
 
   // Support panel buttons → open modals
   if (customId === "open_bug_ticket")     { await interaction.showModal(buildBugModal());     return; }
