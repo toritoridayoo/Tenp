@@ -1122,8 +1122,8 @@ function isModRole(member: GuildMember | null): boolean {
 
 async function handleCloseCommand(interaction: ChatInputCommandInteraction) {
   const member = interaction.member as GuildMember | null;
-  if (!isModRole(member)) {
-    await interaction.reply({ content: "❌ このコマンドはmodロールを持つメンバーのみ使用できます。", flags: 64 });
+  if (!isStaff(member)) {
+    await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
     return;
   }
   const ch = interaction.channel;
@@ -1183,8 +1183,8 @@ async function sendCloseLog(
 
 async function handleTicketAddCommand(interaction: ChatInputCommandInteraction) {
   const member = interaction.member as GuildMember | null;
-  if (!isModRole(member)) {
-    await interaction.reply({ content: "❌ このコマンドはmodロールを持つメンバーのみ使用できます。", flags: 64 });
+  if (!isStaff(member)) {
+    await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
     return;
   }
   const ch = interaction.channel;
