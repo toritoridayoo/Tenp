@@ -318,6 +318,13 @@ export async function handleInterviewHire(
   } catch { /* DM disabled — ignore */ }
 
   await interaction.editReply("✅ 採用しました。ロールを付与しました。");
+
+  // Close interview channel after 5s
+  const ch = interaction.channel;
+  if (ch instanceof TextChannel) {
+    await ch.send({ embeds: [new EmbedBuilder().setColor(Colors.Green).setDescription("✅ このチャンネルは5秒後にクローズされます。")] });
+    setTimeout(() => { ch.delete().catch(() => {}); }, 5000);
+  }
 }
 
 // ── 9. Interview reject ───────────────────────────────────────────────────────
@@ -354,6 +361,13 @@ export async function handleInterviewReject(
   } catch { /* DM disabled — ignore */ }
 
   await interaction.editReply("❌ 不採用にしました。");
+
+  // Close interview channel after 5s
+  const ch = interaction.channel;
+  if (ch instanceof TextChannel) {
+    await ch.send({ embeds: [new EmbedBuilder().setColor(Colors.Red).setDescription("❌ このチャンネルは5秒後にクローズされます。")] });
+    setTimeout(() => { ch.delete().catch(() => {}); }, 5000);
+  }
 }
 
 // ── 7. Reject ─────────────────────────────────────────────────────────────────
