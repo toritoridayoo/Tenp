@@ -1140,8 +1140,8 @@ async function handleCloseCommand(interaction: ChatInputCommandInteraction) {
   await closeTicketChannel(ch, interaction.user.id, reason);
 }
 
-const SUPPORT_PREFIXES = ["[🐛]", "[🚨]", "[⚖️]", "[❓]"];
-const PURCHASE_PREFIXES = ["[🔔]", "[🎥]"];
+const SUPPORT_PREFIXES = ["🐛", "🚨", "⚖️", "❓"];
+const PURCHASE_PREFIXES = ["🔔", "🎥"];
 
 async function sendCloseLog(
   interaction: ChatInputCommandInteraction,
