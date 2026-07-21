@@ -4,42 +4,56 @@ import {
   ButtonInteraction,
   ButtonStyle,
   ChatInputCommandInteraction,
-  Colors,
   EmbedBuilder,
+  GuildMember,
   TextChannel,
 } from "discord.js";
+import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 
-// ── /embed コマンド ──────────────────────────────────────────────────────────
+// In-memory command cache (messageId → commandStr)
+const embedCommandCache = new Map<string, string>();
+
+// ── Role guard ────────────────────────────────────────────────────────────────
+
+function hasEmbedRole(member: GuildMember | null): boolean {
+  if (!member) return false;
+  return member.roles.cache.has(botConfig.subStaffRoleId);
+}
+
+// ── /embed コマンド ───────────────────────────────────────────────────────────
 
 export async function handleEmbedCommand(
   interaction: ChatInputCommandInteraction
 ): Promise<void> {
-  await interaction.deferReply({ flags: 64 });
+  const member = interaction.member as GuildMember | null;
+  if (!hasEmbedRole(member)) {
+    await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
+    return;
+  }
 
-  const targetChannel = interaction.options.getChannel("channel", true);
-  const title         = interaction.options.getString("title")       ?? undefined;
-  const description   = interaction.options.getString("description") ?? undefined;
-  const colorHex      = interaction.options.getString("color")       ?? undefined;
-  const imageUrl      = interaction.options.getString("image")       ?? undefined;
-  const thumbnailUrl  = interaction.options.getString("thumbnail")   ?? undefined;
-  const footerText    = interaction.options.getString("footer")      ?? undefined;
+  const title        = interaction.options.getString("title")       ?? undefined;
+  const description  = interaction.options.getString("description") ?? undefined;
+  const colorHex     = interaction.options.getString("color")       ?? undefined;
+  const imageUrl     = interaction.options.getString("image")       ?? undefined;
+  const thumbnailUrl = interaction.options.getString("thumbnail")   ?? undefined;
+  const footerText   = interaction.options.getString("footer")      ?? undefined;
 
   if (!title && !description && !imageUrl && !thumbnailUrl) {
-    await interaction.editReply("❌ `title`・`description`・`image`・`thumbnail` のいずれかを指定してください。");
+    await interaction.reply({ content: "❌ `title`・`description`・`image`・`thumbnail` のいずれかを指定してください。", flags: 64 });
     return;
   }
 
   const color = colorHex ? parseInt(colorHex.replace("#", ""), 16) : undefined;
 
-  try {
-    const ch = await interaction.client.channels.fetch(targetChannel.id);
-    if (!ch || !(ch instanceof TextChannel)) {
-      await interaction.editReply("❌ テキストチャンネルを指定してください。");
-      return;
-    }
+  const ch = interaction.channel;
+  if (!ch || !(ch instanceof TextChannel)) {
+    await interaction.reply({ content: "❌ このコマンドはテキストチャンネルで使用してください。", flags: 64 });
+    return;
+  }
 
-    // Build the actual embed
+  try {
+    // Build actual embed
     const embed = new EmbedBuilder();
     if (color !== undefined) embed.setColor(color);
     if (title)        embed.setTitle(title);
@@ -48,8 +62,8 @@ export async function handleEmbedCommand(
     if (thumbnailUrl) embed.setThumbnail(thumbnailUrl);
     if (footerText)   embed.setFooter({ text: footerText });
 
-    // Build command reconstruction string (stored in usage embed field for retrieval)
-    const parts = [`/embed channel:<#${ch.id}>`];
+    // Build command reconstruction string
+    const parts = [`/embed`];
     if (title)        parts.push(`title:${title}`);
     if (description)  parts.push(`description:${description}`);
     if (colorHex)     parts.push(`color:${colorHex}`);
@@ -58,71 +72,54 @@ export async function handleEmbedCommand(
     if (footerText)   parts.push(`footer:${footerText}`);
     const commandStr = parts.join(" ");
 
-    // 1. Send usage notice first (with placeholder disabled button)
-    const usageEmbed = new EmbedBuilder()
-      .setColor(Colors.Blurple)
-      .setAuthor({ name: `${interaction.user.displayName} さんがembedを使用しました`, iconURL: interaction.user.displayAvatarURL() })
-      .addFields({ name: "📋 コマンド", value: `\`\`\`\n${commandStr}\n\`\`\``, inline: false })
-      .setTimestamp();
-
+    // Reply publicly — Discord automatically shows "○○さんが /embed を使用しました" above
+    // Use a placeholder button first, then update with the real message ID
     const placeholderRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId("_placeholder")
-        .setLabel("📋 コマンドをコピー")
-        .setStyle(ButtonStyle.Secondary)
+        .setLabel("📋 コマンドを表示")
+        .setStyle(ButtonStyle.Primary)
         .setDisabled(true)
     );
 
-    const usageMsg = await ch.send({ embeds: [usageEmbed], components: [placeholderRow] });
+    await interaction.reply({ embeds: [embed], components: [placeholderRow] });
 
-    // 2. Update button with correct IDs (channelId_messageId)
-    const correctRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    // Fetch the sent message to get its ID
+    const replyMsg = await interaction.fetchReply();
+    embedCommandCache.set(replyMsg.id, commandStr);
+
+    // Update button with real message ID
+    const realRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(`show_embed_cmd_${ch.id}_${usageMsg.id}`)
-        .setLabel("📋 コマンドをコピー")
-        .setStyle(ButtonStyle.Secondary)
+        .setCustomId(`show_embed_cmd_${replyMsg.id}`)
+        .setLabel("📋 コマンドを表示")
+        .setStyle(ButtonStyle.Primary)
     );
-    await usageMsg.edit({ embeds: [usageEmbed], components: [correctRow] });
+    await interaction.editReply({ embeds: [embed], components: [realRow] });
 
-    // 3. Send the actual embed below
-    await ch.send({ embeds: [embed] });
-
-    await interaction.editReply(`✅ <#${ch.id}> にEmbedを送信しました！`);
-    logger.info({ channelId: ch.id, userId: interaction.user.id }, "Embed sent");
+    logger.info({ channelId: ch.id, userId: interaction.user.id, messageId: replyMsg.id }, "Embed sent");
   } catch (err) {
     logger.error({ err }, "Failed to send embed");
-    await interaction.editReply("❌ Embedの送信中にエラーが発生しました。");
+    await interaction.followUp({ content: "❌ Embedの送信中にエラーが発生しました。", flags: 64 });
   }
 }
 
-// ── コマンド表示ボタン ────────────────────────────────────────────────────────
+// ── コマンド表示ボタン ─────────────────────────────────────────────────────────
 
 export async function handleShowEmbedCmd(
   interaction: ButtonInteraction,
-  logChannelId: string,
-  logMessageId: string
+  messageId: string,
 ): Promise<void> {
-  try {
-    const logCh = await interaction.client.channels.fetch(logChannelId).catch(() => null);
-    if (!(logCh instanceof TextChannel)) {
-      await interaction.reply({ content: "❌ チャンネルを取得できませんでした。", flags: 64 });
-      return;
-    }
-    const logMsg = await logCh.messages.fetch(logMessageId).catch(() => null);
-    if (!logMsg) {
-      await interaction.reply({ content: "❌ メッセージが見つかりませんでした。", flags: 64 });
-      return;
-    }
-
-    const cmdField = logMsg.embeds[0]?.fields.find(f => f.name === "📋 コマンド");
-    const cmdText  = cmdField?.value ?? "コマンド情報が見つかりませんでした。";
-
+  const commandStr = embedCommandCache.get(messageId);
+  if (!commandStr) {
     await interaction.reply({
-      content: `**再現コマンド（コピーしてください）**\n${cmdText}`,
+      content: "❌ コマンド情報が見つかりませんでした（ボットが再起動された可能性があります）。",
       flags: 64,
     });
-  } catch (err) {
-    logger.error({ err }, "Failed to show embed cmd");
-    await interaction.reply({ content: "❌ エラーが発生しました。", flags: 64 });
+    return;
   }
+  await interaction.reply({
+    content: `**再現コマンド（コピーしてください）**\n\`\`\`\n${commandStr}\n\`\`\``,
+    flags: 64,
+  });
 }

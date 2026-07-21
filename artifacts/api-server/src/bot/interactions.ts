@@ -113,8 +113,8 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   if (customId.startsWith("grant_complete_")) { await handleGrantComplete(interaction); return; }
 
   // Embed command copy button
-  const showEmbedCmdMatch = customId.match(/^show_embed_cmd_(\d+)_(\d+)$/);
-  if (showEmbedCmdMatch) { await handleShowEmbedCmd(interaction, showEmbedCmdMatch[1]!, showEmbedCmdMatch[2]!); return; }
+  const showEmbedCmdMatch = customId.match(/^show_embed_cmd_(\d+)$/);
+  if (showEmbedCmdMatch) { await handleShowEmbedCmd(interaction, showEmbedCmdMatch[1]!); return; }
 
   // User receipt confirmation (only ticket creator can press)
   if (customId.startsWith("user_receipt_")) {

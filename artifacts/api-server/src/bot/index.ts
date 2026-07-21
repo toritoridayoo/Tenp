@@ -24,8 +24,7 @@ const commands = [
     .toJSON(),
   new SlashCommandBuilder()
     .setName("embed")
-    .setDescription("Embedメッセージを作成して指定チャンネルに送信します（スタッフ専用）")
-    .addChannelOption((o) => o.setName("channel").setDescription("送信先チャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
+    .setDescription("Embedメッセージを現在のチャンネルに送信します（スタッフ専用）")
     .addStringOption((o) => o.setName("title").setDescription("タイトル").setMaxLength(256).setRequired(false))
     .addStringOption((o) => o.setName("description").setDescription("本文").setMaxLength(4096).setRequired(false))
     .addStringOption((o) => o.setName("color").setDescription("色").setRequired(false).addChoices(

@@ -5,13 +5,26 @@ import {
   ChatInputCommandInteraction,
   Colors,
   EmbedBuilder,
+  GuildMember,
   TextChannel,
 } from "discord.js";
+import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
+
+function hasSendRole(member: GuildMember | null): boolean {
+  if (!member) return false;
+  return member.roles.cache.has(botConfig.subStaffRoleId);
+}
 
 export async function handleTicketPanelSendCommand(
   interaction: ChatInputCommandInteraction
 ): Promise<void> {
+  const member = interaction.member as GuildMember | null;
+  if (!hasSendRole(member)) {
+    await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
+    return;
+  }
+
   const targetChannel = interaction.options.getChannel("channel", true);
   await interaction.deferReply({ flags: 64 });
 
@@ -71,8 +84,13 @@ export async function handleTicketPanelSendCommand(
 export async function handlePurchaseSendCommand(
   interaction: ChatInputCommandInteraction
 ): Promise<void> {
-  const targetChannel = interaction.options.getChannel("channel", true);
+  const member = interaction.member as GuildMember | null;
+  if (!hasSendRole(member)) {
+    await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
+    return;
+  }
 
+  const targetChannel = interaction.options.getChannel("channel", true);
   await interaction.deferReply({ flags: 64 });
 
   try {
@@ -114,13 +132,10 @@ export async function handlePurchaseSendCommand(
     );
 
     await channel.send({ embeds: [embed], components: [row] });
-
     await interaction.editReply(`✅ <#${channel.id}> にパネルを送信しました！`);
     logger.info({ channelId: channel.id }, "Purchase panel sent");
   } catch (err) {
     logger.error({ err }, "Failed to send purchase panel");
-    await interaction.editReply(
-      "❌ パネルの送信中にエラーが発生しました。ボットの権限を確認してください。"
-    );
+    await interaction.editReply("❌ パネルの送信中にエラーが発生しました。ボットの権限を確認してください。");
   }
 }
