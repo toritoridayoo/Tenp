@@ -69,6 +69,7 @@ export async function handleInteraction(interaction: Interaction) {
     if (interaction.commandName === "ticketpanel_send") await handleTicketPanelSendCommand(interaction);
     if (interaction.commandName === "embed")            await handleEmbedCommand(interaction);
     if (interaction.commandName === "close")            await handleCloseCommand(interaction);
+    if (interaction.commandName === "ticket_add")       await handleTicketAddCommand(interaction);
     return;
   }
   if (interaction.isButton()) {
@@ -1114,10 +1115,15 @@ async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: str
   }
 }
 
+function isModRole(member: GuildMember | null): boolean {
+  if (!member) return false;
+  return member.roles.cache.has(botConfig.subStaffRoleId);
+}
+
 async function handleCloseCommand(interaction: ChatInputCommandInteraction) {
   const member = interaction.member as GuildMember | null;
-  if (!isStaff(member)) {
-    await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
+  if (!isModRole(member)) {
+    await interaction.reply({ content: "❌ このコマンドはmodロールを持つメンバーのみ使用できます。", flags: 64 });
     return;
   }
   const ch = interaction.channel;
@@ -1128,6 +1134,34 @@ async function handleCloseCommand(interaction: ChatInputCommandInteraction) {
   const reason = interaction.options.getString("reason") ?? "スタッフによるクローズ";
   await interaction.reply({ content: `🔒 **${reason}** によりこのチケットをクローズします。`, flags: 64 });
   await closeTicketChannel(ch, interaction.user.id, reason);
+}
+
+async function handleTicketAddCommand(interaction: ChatInputCommandInteraction) {
+  const member = interaction.member as GuildMember | null;
+  if (!isModRole(member)) {
+    await interaction.reply({ content: "❌ このコマンドはmodロールを持つメンバーのみ使用できます。", flags: 64 });
+    return;
+  }
+  const ch = interaction.channel;
+  if (!(ch instanceof TextChannel)) {
+    await interaction.reply({ content: "❌ テキストチャンネルで使用してください。", flags: 64 });
+    return;
+  }
+  const targetUser = interaction.options.getUser("user", true);
+  await interaction.deferReply({ flags: 64 });
+  try {
+    await ch.permissionOverwrites.edit(targetUser.id, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true,
+      AttachFiles: true,
+    });
+    await ch.send({ content: `✅ <@${targetUser.id}> をこのチャンネルに追加しました。` });
+    await interaction.editReply(`✅ <@${targetUser.id}> を追加しました。`);
+  } catch (err) {
+    logger.error({ err }, "Failed to add user to ticket");
+    await interaction.editReply("❌ ユーザーの追加に失敗しました。");
+  }
 }
 
 async function closeTicketChannel(channel: TextChannel | null, targetUserId: string, reason: string) {

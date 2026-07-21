@@ -26,8 +26,13 @@ const commands = [
     .toJSON(),
   new SlashCommandBuilder()
     .setName("close")
-    .setDescription("現在のチケットチャンネルをクローズします（スタッフ専用）")
+    .setDescription("現在のチケットチャンネルをクローズします（modロール専用）")
     .addStringOption((o) => o.setName("reason").setDescription("クローズ理由（任意）").setMaxLength(200).setRequired(false))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("ticket_add")
+    .setDescription("チケットチャンネルにユーザーを追加します（modロール専用）")
+    .addUserOption((o) => o.setName("user").setDescription("追加するユーザー").setRequired(true))
     .toJSON(),
   new SlashCommandBuilder()
     .setName("embed")
