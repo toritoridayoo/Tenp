@@ -16,6 +16,7 @@ import {
 } from "discord.js";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
+import { isStaffAppOpen } from "./staffAppStatus.js";
 
 // ── Questions ─────────────────────────────────────────────────────────────────
 
@@ -59,6 +60,16 @@ async function sendQuestion(dmChannel: DMChannel, questionIndex: number): Promis
 // ── 1. "スタッフ応募" button (in guild panel) ─────────────────────────────────
 
 export async function handleStaffApplyButton(interaction: ButtonInteraction): Promise<void> {
+  // 受付状態チェック
+  const guildId = interaction.guildId ?? "";
+  if (guildId && !await isStaffAppOpen(guildId)) {
+    await interaction.reply({
+      content: "❌ 現在スタッフ応募は締め切り中です。募集が再開されるまでお待ちください。",
+      flags: 64,
+    });
+    return;
+  }
+
   if (pendingApplications.has(interaction.user.id)) {
     await interaction.reply({
       content: "❌ 既に応募フローが進行中です。DMを確認してください。",

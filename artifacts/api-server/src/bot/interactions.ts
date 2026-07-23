@@ -24,6 +24,7 @@ import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panelCommand.js";
 import { handlePanelSettingsSet, handlePanelSettingsView } from "./panelSettingsCommand.js";
+import { setStaffAppOpen } from "./staffAppStatus.js";
 import { isStaffInGuild, getGuildSettings, getPurchaseCtx, getSupportCtx } from "./guildConfig.js";
 import {
   handleStaffApplyButton,
@@ -67,6 +68,9 @@ export async function handleInteraction(interaction: Interaction) {
       const sub = interaction.options.getSubcommand();
       if (sub === "set")  await handlePanelSettingsSet(interaction);
       if (sub === "view") await handlePanelSettingsView(interaction);
+    }
+    if (interaction.commandName === "staff_application") {
+      await handleStaffApplicationCommand(interaction);
     }
     return;
   }
@@ -1414,6 +1418,28 @@ async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: str
     });
   } catch (err) {
     logger.error({ err }, "Failed to send reject log");
+  }
+}
+
+async function handleStaffApplicationCommand(interaction: ChatInputCommandInteraction) {
+  const member = interaction.member as GuildMember | null;
+  if (!member?.permissions.has("Administrator")) {
+    await interaction.reply({ content: "❌ このコマンドはサーバー管理者のみ使用できます。", flags: 64 });
+    return;
+  }
+  const status = interaction.options.getBoolean("status", true);
+  const guildId = interaction.guildId!;
+  await interaction.deferReply({ flags: 64 });
+  try {
+    await setStaffAppOpen(guildId, status);
+    await interaction.editReply(
+      status
+        ? "✅ スタッフ応募を **受付中** に設定しました。"
+        : "🔒 スタッフ応募を **締め切り** に設定しました。",
+    );
+  } catch (err) {
+    logger.error({ err }, "Failed to set staff app status");
+    await interaction.editReply("❌ 設定の変更に失敗しました。");
   }
 }
 

@@ -36,6 +36,15 @@ const commands = [
     .addUserOption((o) => o.setName("user").setDescription("追加するユーザー").setRequired(true))
     .toJSON(),
   new SlashCommandBuilder()
+    .setName("staff_application")
+    .setDescription("スタッフ応募の受付状態を切り替えます（管理者専用）")
+    .addBooleanOption((o) =>
+      o.setName("status")
+        .setDescription("true = 受付中、false = 締め切り")
+        .setRequired(true)
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName("panel_settings")
     .setDescription("パネルごとのスタッフ・カテゴリ・ログチャンネルを設定します（管理者専用）")
     .addSubcommand((sub) =>
