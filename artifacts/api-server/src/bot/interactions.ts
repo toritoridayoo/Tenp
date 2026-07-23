@@ -1305,15 +1305,40 @@ function buildTranscript(messages: import("discord.js").Collection<string, impor
   return sorted.map((msg) => {
     const time = new Date(msg.createdTimestamp).toLocaleString("ja-JP");
     const parts: string[] = [];
+
     if (msg.content) parts.push(msg.content);
+
     for (const embed of msg.embeds) {
       const embedDesc = [embed.title, embed.description].filter(Boolean).join(": ");
       parts.push(`[embed: ${embedDesc || "（内容なし）"}]`);
     }
+
     for (const att of msg.attachments.values()) {
       parts.push(`[添付: ${att.name} | ${att.url}]`);
     }
-    const content = parts.join(" ") || "[内容なし]";
+
+    for (const sticker of msg.stickers.values()) {
+      parts.push(`[スタンプ: ${sticker.name}]`);
+    }
+
+    // システムメッセージ（参加・ピン留め等）
+    if (parts.length === 0) {
+      const typeMap: Record<number, string> = {
+        0:  "", // Default — content already handled
+        6:  "[ピン留め]",
+        7:  "[サーバー参加]",
+        8:  "[サーバーブースト]",
+        9:  "[サーバーブースト Tier1]",
+        10: "[サーバーブースト Tier2]",
+        11: "[サーバーブースト Tier3]",
+        19: "[返信]",
+        20: "[スラッシュコマンド]",
+      };
+      const label = typeMap[msg.type as number];
+      if (label) parts.push(label);
+    }
+
+    const content = parts.join(" ") || "[不明なメッセージ形式]";
     return `[${time}] ${msg.author.tag}: ${content}`;
   }).join("\n");
 }
