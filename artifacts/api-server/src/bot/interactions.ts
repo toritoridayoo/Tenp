@@ -775,6 +775,19 @@ async function handleCloseTicket(
       await sendDM(targetMember, dmEmbed);
     }
 
+    const logChannelId = botConfig.supportLogChannelId || botConfig.ticketLogChannelId;
+    await sendTicketTranscriptLog(
+      interaction.guild as Guild | null,
+      channel,
+      targetUserId,
+      logChannelId,
+      `✅ チケットクローズ — ${label}対応済み`,
+      [
+        { name: "✅ 対応スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+        ...(reason ? [{ name: "📝 対応内容", value: reason, inline: false }] : []),
+      ],
+    );
+
     await closeTicketChannel(channel, targetUserId, "対応済み");
     await interaction.editReply("✅ チケットを対応済みとしてクローズしました。");
     logger.info({ targetUserId, type, reason: reason || null, closedBy: interaction.user.id }, "Support ticket closed");
@@ -1287,43 +1300,66 @@ async function handleKeyGrantConfirm(interaction: ButtonInteraction, targetUserI
 
 // ── Receipt log (with txt transcript) ────────────────────────────────────
 
-async function sendReceiptLog(guild: Guild | null, channel: TextChannel | null, userId: string): Promise<void> {
+function buildTranscript(messages: import("discord.js").Collection<string, import("discord.js").Message>): string {
+  const sorted = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+  return sorted.map((msg) => {
+    const time = new Date(msg.createdTimestamp).toLocaleString("ja-JP");
+    const parts: string[] = [];
+    if (msg.content) parts.push(msg.content);
+    for (const embed of msg.embeds) {
+      const embedDesc = [embed.title, embed.description].filter(Boolean).join(": ");
+      parts.push(`[embed: ${embedDesc || "（内容なし）"}]`);
+    }
+    for (const att of msg.attachments.values()) {
+      parts.push(`[添付: ${att.name} | ${att.url}]`);
+    }
+    const content = parts.join(" ") || "[内容なし]";
+    return `[${time}] ${msg.author.tag}: ${content}`;
+  }).join("\n");
+}
+
+async function sendTicketTranscriptLog(
+  guild: Guild | null,
+  channel: TextChannel | null,
+  userId: string,
+  logChannelId: string,
+  embedTitle: string,
+  extraFields: { name: string; value: string; inline: boolean }[] = [],
+): Promise<void> {
   if (!guild || !channel) return;
   try {
-    const logCh = await guild.channels.fetch(botConfig.ticketLogChannelId);
+    const logCh = await guild.channels.fetch(logChannelId);
     if (!(logCh instanceof TextChannel)) return;
 
-    // メッセージをすべて取得（最大100件）
     const messages = await channel.messages.fetch({ limit: 100 });
-    const sorted = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-
-    const lines = sorted.map((msg) => {
-      const time = new Date(msg.createdTimestamp).toLocaleString("ja-JP");
-      const content =
-        msg.content ||
-        (msg.embeds.length > 0 ? `[embed: ${msg.embeds[0]?.title ?? "（タイトルなし）"}]` : "[添付ファイル]");
-      return `[${time}] ${msg.author.tag}: ${content}`;
-    });
-
-    const txtContent = lines.join("\n");
+    const txtContent = buildTranscript(messages);
     const attachment = new AttachmentBuilder(Buffer.from(txtContent, "utf-8"), {
       name: `${channel.name}.txt`,
     });
 
     const embed = new EmbedBuilder()
       .setColor(Colors.Green)
-      .setTitle("✅ チケットクローズ — 受け取り確認完了")
+      .setTitle(embedTitle)
       .addFields(
         { name: "📁 チャンネル", value: `#${channel.name}`, inline: true },
         { name: "👤 申請者", value: `<@${userId}>`, inline: true },
+        ...extraFields,
       )
       .setTimestamp()
       .setFooter({ text: `チャンネルID: ${channel.id}` });
 
     await logCh.send({ embeds: [embed], files: [attachment] });
   } catch (err) {
-    logger.error({ err }, "Failed to send receipt log");
+    logger.error({ err }, "Failed to send ticket transcript log");
   }
+}
+
+async function sendReceiptLog(guild: Guild | null, channel: TextChannel | null, userId: string): Promise<void> {
+  await sendTicketTranscriptLog(
+    guild, channel, userId,
+    botConfig.ticketLogChannelId,
+    "✅ チケットクローズ — 受け取り確認完了",
+  );
 }
 
 async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: string, type: string, reason: string) {
