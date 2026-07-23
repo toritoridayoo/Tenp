@@ -13,6 +13,7 @@ import {
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import type { KeyItem } from "./pendingTickets.js";
+import type { PanelCtx, StaffEntry } from "./guildConfig.js";
 
 export type ProductType = "permanent" | "1month";
 
@@ -31,7 +32,7 @@ export const KEY_QUANTITIES: Record<string, number[]> = {
   Shards:       [300, 500, 1500, 3000, 4000, 10000],
 };
 
-// ── Permission helper ─────────────────────────────────────────────────────
+// ── Permission helpers ────────────────────────────────────────────────────
 
 const ALLOW_ALL = [
   PermissionFlagsBits.ViewChannel,
@@ -40,26 +41,39 @@ const ALLOW_ALL = [
   PermissionFlagsBits.AttachFiles,
 ] as const;
 
-function buildPermissionOverwrites(guild: Guild, userId: string) {
+function buildPermissionOverwrites(guild: Guild, userId: string, staffIds?: StaffEntry[]) {
+  const entries = staffIds ?? defaultStaffEntries();
   return [
-    { id: guild.id,               deny:  ALLOW_ALL },
-    { id: userId,                  allow: ALLOW_ALL },
-    { id: botConfig.staffRoleId,   allow: ALLOW_ALL },
+    { id: guild.id, deny: ALLOW_ALL },
+    { id: userId,   allow: ALLOW_ALL },
+    ...entries.map((e) => ({ id: e.id, allow: ALLOW_ALL })),
   ];
 }
 
-function buildSupportPermissionOverwrites(guild: Guild, userId: string) {
+function buildSupportPermissionOverwrites(guild: Guild, userId: string, staffIds?: StaffEntry[]) {
+  const entries = staffIds ?? defaultStaffEntries();
+  const extra: { id: string; allow: readonly bigint[] }[] = [];
+  if (botConfig.staffHireRoleId) extra.push({ id: botConfig.staffHireRoleId, allow: ALLOW_ALL });
   return [
-    { id: guild.id,                   deny:  ALLOW_ALL },
-    { id: userId,                      allow: ALLOW_ALL },
-    { id: botConfig.staffRoleId,       allow: ALLOW_ALL },
-    { id: botConfig.subStaffRoleId,    allow: ALLOW_ALL },
-    { id: botConfig.staffHireRoleId,   allow: ALLOW_ALL },
+    { id: guild.id, deny: ALLOW_ALL },
+    { id: userId,   allow: ALLOW_ALL },
+    ...entries.map((e) => ({ id: e.id, allow: ALLOW_ALL })),
+    ...extra,
   ];
 }
 
-const SUPPORT_MENTION = () =>
-  `<@&${botConfig.subStaffRoleId}> <@&${botConfig.staffHireRoleId}>`;
+function defaultStaffEntries(): StaffEntry[] {
+  const ids: StaffEntry[] = [];
+  if (botConfig.staffRoleId)    ids.push({ id: botConfig.staffRoleId,    type: "role" });
+  if (botConfig.subStaffRoleId) ids.push({ id: botConfig.subStaffRoleId, type: "role" });
+  return ids;
+}
+
+function buildMentions(userId: string, staffIds?: StaffEntry[]): string {
+  const entries = staffIds ?? defaultStaffEntries();
+  const staffPart = entries.map((e) => (e.type === "role" ? `<@&${e.id}>` : `<@${e.id}>`)).join(" ");
+  return `<@${userId}> ${staffPart}`.trim();
+}
 
 // ── Rank ticket ───────────────────────────────────────────────────────────
 
@@ -68,14 +82,16 @@ export async function createTicketChannel(
   user: User,
   mcid: string,
   purchaseId: string,
-  product: ProductType
+  product: ProductType,
+  ctx?: PanelCtx,
 ): Promise<string> {
+  const categoryId = ctx?.categoryId || botConfig.ticketChannelId;
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
     name: `［🔔］ランク受け取り-${safeMcid}`,
     type: ChannelType.GuildText,
-    parent: botConfig.ticketChannelId,
-    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+    parent: categoryId,
+    permissionOverwrites: buildPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
   const approveCustomId =
@@ -110,7 +126,7 @@ export async function createTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    content: buildMentions(user.id, ctx?.staffIds),
     embeds: [embed],
     components: [row],
   });
@@ -121,7 +137,7 @@ export async function createTicketChannel(
     { name: "🧾 購入番号", value: `\`${purchaseId}\``, inline: true },
     { name: "📦 商品", value: PRODUCT_LABELS[product], inline: true },
     { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
-  ]);
+  ], ctx?.logChannelId);
 
   logger.info({ userId: user.id, mcid, purchaseId, product, channelId: ticketChannel.id }, "Rank ticket created");
   return ticketChannel.id;
@@ -133,14 +149,16 @@ export async function createKeyTicketChannel(
   guild: Guild,
   user: User,
   mcid: string,
-  items: KeyItem[]
+  items: KeyItem[],
+  ctx?: PanelCtx,
 ): Promise<string> {
+  const categoryId = ctx?.categoryId || botConfig.ticketChannelId;
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
     name: `［🔔］鍵・シャード受け取り-${safeMcid}`,
     type: ChannelType.GuildText,
-    parent: botConfig.ticketChannelId,
-    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+    parent: categoryId,
+    permissionOverwrites: buildPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -175,7 +193,7 @@ export async function createKeyTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    content: buildMentions(user.id, ctx?.staffIds),
     embeds: [embed],
     components: [row],
   });
@@ -191,7 +209,7 @@ export async function createKeyTicketChannel(
     { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
     ...logItemFields,
     { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
-  ]);
+  ], ctx?.logChannelId);
 
   logger.info({ userId: user.id, mcid, items, channelId: ticketChannel.id }, "Key ticket created");
   return ticketChannel.id;
@@ -203,14 +221,16 @@ export async function createMediaTicketChannel(
   guild: Guild,
   user: User,
   mcid: string,
-  youtubeUrl: string
+  youtubeUrl: string,
+  ctx?: PanelCtx,
 ): Promise<string> {
+  const categoryId = ctx?.categoryId || botConfig.ticketChannelId;
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
     name: `［🎥］メディアランク申請-${safeMcid}`,
     type: ChannelType.GuildText,
-    parent: botConfig.ticketChannelId,
-    permissionOverwrites: buildPermissionOverwrites(guild, user.id),
+    parent: categoryId,
+    permissionOverwrites: buildPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -239,12 +259,11 @@ export async function createMediaTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> <@&${botConfig.staffRoleId}>`,
+    content: buildMentions(user.id, ctx?.staffIds),
     embeds: [embed],
     components: [row],
   });
 
-  // Prompt user to share analytics screenshot
   await ticketChannel.send({
     content:
       `📊 <@${user.id}> **アナリティクス画面の貼り付けをお願いします！**\n\n` +
@@ -261,7 +280,7 @@ export async function createMediaTicketChannel(
     { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
     { name: "▶️ YouTube URL", value: youtubeUrl, inline: false },
     { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
-  ]);
+  ], ctx?.logChannelId);
 
   logger.info({ userId: user.id, mcid, youtubeUrl, channelId: ticketChannel.id }, "Media ticket created");
   return ticketChannel.id;
@@ -273,14 +292,16 @@ export async function createBugTicketChannel(
   guild: Guild,
   user: User,
   mcid: string,
-  bugContent: string
+  bugContent: string,
+  ctx?: PanelCtx,
 ): Promise<string> {
+  const categoryId = ctx?.categoryId || botConfig.supportTicketCategoryId || botConfig.ticketChannelId;
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
     name: `［🐛］バグ報告-${safeMcid}`,
     type: ChannelType.GuildText,
-    parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
-    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
+    parent: categoryId,
+    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -303,7 +324,7 @@ export async function createBugTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> ${SUPPORT_MENTION()}`,
+    content: buildMentions(user.id, ctx?.staffIds),
     embeds: [embed],
     components: [row],
   });
@@ -313,7 +334,7 @@ export async function createBugTicketChannel(
     { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
     { name: "🐛 バグの内容", value: bugContent, inline: false },
     { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
-  ]);
+  ], ctx?.logChannelId);
 
   logger.info({ userId: user.id, mcid, channelId: ticketChannel.id }, "Bug ticket created");
   return ticketChannel.id;
@@ -326,14 +347,16 @@ export async function createReportTicketChannel(
   user: User,
   ownMcid: string,
   reportedMcid: string,
-  violationContent: string
+  violationContent: string,
+  ctx?: PanelCtx,
 ): Promise<string> {
+  const categoryId = ctx?.categoryId || botConfig.supportTicketCategoryId || botConfig.ticketChannelId;
   const safeMcid = ownMcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
     name: `［🚨］プレイヤー通報-${safeMcid}`,
     type: ChannelType.GuildText,
-    parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
-    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
+    parent: categoryId,
+    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -357,7 +380,7 @@ export async function createReportTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> ${SUPPORT_MENTION()}`,
+    content: buildMentions(user.id, ctx?.staffIds),
     embeds: [embed],
     components: [row],
   });
@@ -368,7 +391,7 @@ export async function createReportTicketChannel(
     { name: "⚠️ 対象 MCID", value: `\`${reportedMcid}\``, inline: true },
     { name: "📋 違反内容", value: violationContent, inline: false },
     { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
-  ]);
+  ], ctx?.logChannelId);
 
   logger.info({ userId: user.id, ownMcid, reportedMcid, channelId: ticketChannel.id }, "Report ticket created");
   return ticketChannel.id;
@@ -380,14 +403,16 @@ export async function createAppealTicketChannel(
   guild: Guild,
   user: User,
   mcid: string,
-  details: string
+  details: string,
+  ctx?: PanelCtx,
 ): Promise<string> {
+  const categoryId = ctx?.categoryId || botConfig.supportTicketCategoryId || botConfig.ticketChannelId;
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const ticketChannel = await guild.channels.create({
     name: `［⚖️］異議申し立て-${safeMcid}`,
     type: ChannelType.GuildText,
-    parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
-    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
+    parent: categoryId,
+    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -410,7 +435,7 @@ export async function createAppealTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> ${SUPPORT_MENTION()}`,
+    content: buildMentions(user.id, ctx?.staffIds),
     embeds: [embed],
     components: [row],
   });
@@ -420,7 +445,7 @@ export async function createAppealTicketChannel(
     { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
     { name: "📝 詳細", value: details, inline: false },
     { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
-  ]);
+  ], ctx?.logChannelId);
 
   logger.info({ userId: user.id, mcid, channelId: ticketChannel.id }, "Appeal ticket created");
   return ticketChannel.id;
@@ -431,14 +456,16 @@ export async function createAppealTicketChannel(
 export async function createInquiryTicketChannel(
   guild: Guild,
   user: User,
-  content: string
+  content: string,
+  ctx?: PanelCtx,
 ): Promise<string> {
+  const categoryId = ctx?.categoryId || botConfig.supportTicketCategoryId || botConfig.ticketChannelId;
   const safeUsername = user.username.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 16) || "user";
   const ticketChannel = await guild.channels.create({
     name: `［❓］お問い合わせ-${safeUsername}`,
     type: ChannelType.GuildText,
-    parent: botConfig.supportTicketCategoryId || botConfig.ticketChannelId,
-    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id),
+    parent: categoryId,
+    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -460,7 +487,7 @@ export async function createInquiryTicketChannel(
     .setFooter({ text: `ユーザーID: ${user.id}` });
 
   await ticketChannel.send({
-    content: `<@${user.id}> ${SUPPORT_MENTION()}`,
+    content: buildMentions(user.id, ctx?.staffIds),
     embeds: [embed],
     components: [row],
   });
@@ -469,7 +496,7 @@ export async function createInquiryTicketChannel(
     { name: "📂 種別", value: "その他のお問い合わせ", inline: true },
     { name: "📝 内容", value: content, inline: false },
     { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
-  ]);
+  ], ctx?.logChannelId);
 
   logger.info({ userId: user.id, channelId: ticketChannel.id }, "Inquiry ticket created");
   return ticketChannel.id;
@@ -480,9 +507,11 @@ export async function createInquiryTicketChannel(
 async function sendSupportTicketLog(
   guild: Guild,
   user: User,
-  fields: { name: string; value: string; inline?: boolean }[]
+  fields: { name: string; value: string; inline?: boolean }[],
+  overrideChannelId?: string,
 ): Promise<void> {
-  const channelId = botConfig.supportLogChannelId || botConfig.ticketLogChannelId;
+  const channelId = overrideChannelId || botConfig.supportLogChannelId || botConfig.ticketLogChannelId;
+  if (!channelId) return;
   try {
     const logChannel = await guild.channels.fetch(channelId);
     if (!logChannel || !(logChannel instanceof TextChannel)) return;
@@ -503,10 +532,13 @@ async function sendSupportTicketLog(
 async function sendTicketLog(
   guild: Guild,
   user: User,
-  fields: { name: string; value: string; inline?: boolean }[]
+  fields: { name: string; value: string; inline?: boolean }[],
+  overrideChannelId?: string,
 ): Promise<void> {
+  const channelId = overrideChannelId || botConfig.ticketLogChannelId;
+  if (!channelId) return;
   try {
-    const logChannel = await guild.channels.fetch(botConfig.ticketLogChannelId);
+    const logChannel = await guild.channels.fetch(channelId);
     if (!logChannel || !(logChannel instanceof TextChannel)) return;
 
     const embed = new EmbedBuilder()

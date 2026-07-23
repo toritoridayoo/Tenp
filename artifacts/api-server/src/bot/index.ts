@@ -36,6 +36,40 @@ const commands = [
     .addUserOption((o) => o.setName("user").setDescription("追加するユーザー").setRequired(true))
     .toJSON(),
   new SlashCommandBuilder()
+    .setName("panel_settings")
+    .setDescription("パネルごとのスタッフ・カテゴリ・ログチャンネルを設定します（管理者専用）")
+    .addSubcommand((sub) =>
+      sub
+        .setName("set")
+        .setDescription("パネルの設定を保存します")
+        .addStringOption((o) =>
+          o.setName("panel").setDescription("設定するパネルの種類").setRequired(true)
+            .addChoices(
+              { name: "🛒 購入チケット", value: "purchase" },
+              { name: "🐛 サポートチケット", value: "support" },
+              { name: "📋 スタッフ応募", value: "staff" },
+            )
+        )
+        .addChannelOption((o) =>
+          o.setName("ticket_category").setDescription("チケットが作成されるカテゴリ").addChannelTypes(ChannelType.GuildCategory).setRequired(true)
+        )
+        .addMentionableOption((o) => o.setName("staff1").setDescription("対応スタッフ1（ロールまたはメンバー）").setRequired(true))
+        .addMentionableOption((o) => o.setName("staff2").setDescription("対応スタッフ2（任意）").setRequired(false))
+        .addMentionableOption((o) => o.setName("staff3").setDescription("対応スタッフ3（任意）").setRequired(false))
+        .addMentionableOption((o) => o.setName("staff4").setDescription("対応スタッフ4（任意）").setRequired(false))
+        .addMentionableOption((o) => o.setName("staff5").setDescription("対応スタッフ5（任意）").setRequired(false))
+        .addChannelOption((o) =>
+          o.setName("log_channel").setDescription("ログを送信するチャンネル（任意）").addChannelTypes(ChannelType.GuildText).setRequired(false)
+        )
+        .addChannelOption((o) =>
+          o.setName("approval_channel").setDescription("承認通知チャンネル（購入チケット用・任意）").addChannelTypes(ChannelType.GuildText).setRequired(false)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub.setName("view").setDescription("現在のパネル設定を表示します")
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName("embed")
     .setDescription("Embedメッセージを現在のチャンネルに送信します（スタッフ専用）")
     .addStringOption((o) => o.setName("title").setDescription("タイトル").setMaxLength(256).setRequired(false))

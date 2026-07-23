@@ -23,6 +23,8 @@ import { roleGrantsTable } from "@workspace/db";
 import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panelCommand.js";
+import { handlePanelSettingsSet, handlePanelSettingsView } from "./panelSettingsCommand.js";
+import { isStaffInGuild, getGuildSettings, getPurchaseCtx, getSupportCtx } from "./guildConfig.js";
 import {
   handleStaffApplyButton,
   handleStaffApplyYes,
@@ -52,16 +54,6 @@ import {
   type KeyItem,
 } from "./pendingTickets.js";
 
-// ── Staff role check ──────────────────────────────────────────────────────
-
-function isStaff(member: GuildMember | null): boolean {
-  if (!member) return false;
-  return (
-    member.roles.cache.has(botConfig.staffRoleId) ||
-    (botConfig.subStaffRoleId !== "" && member.roles.cache.has(botConfig.subStaffRoleId))
-  );
-}
-
 // ── Main router ───────────────────────────────────────────────────────────
 
 export async function handleInteraction(interaction: Interaction) {
@@ -71,6 +63,11 @@ export async function handleInteraction(interaction: Interaction) {
     if (interaction.commandName === "embed")            await handleEmbedCommand(interaction);
     if (interaction.commandName === "close")            await handleCloseCommand(interaction);
     if (interaction.commandName === "ticket_add")       await handleTicketAddCommand(interaction);
+    if (interaction.commandName === "panel_settings") {
+      const sub = interaction.options.getSubcommand();
+      if (sub === "set")  await handlePanelSettingsSet(interaction);
+      if (sub === "view") await handlePanelSettingsView(interaction);
+    }
     return;
   }
   if (interaction.isButton()) {
@@ -120,7 +117,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   const closeTicketMatch = customId.match(/^close_ticket_(bug|report|appeal|inquiry)_(\d+)$/);
   if (closeTicketMatch) {
     const member = interaction.member as GuildMember | null;
-    if (!isStaff(member)) {
+    if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
       await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
       return;
     }
@@ -158,7 +155,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   const keyAssignMatch = customId.match(/^key_assign_(\d+)$/);
   if (keyAssignMatch) {
     const member = interaction.member as GuildMember | null;
-    if (!isStaff(member)) {
+    if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
       await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
       return;
     }
@@ -171,7 +168,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   const keyGrantConfirmMatch = customId.match(/^key_grant_confirm_(\d+)$/);
   if (keyGrantConfirmMatch) {
     const member = interaction.member as GuildMember | null;
-    if (!isStaff(member)) {
+    if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
       await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
       return;
     }
@@ -193,7 +190,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
 
   if (rejectMatch || keyRejectMatch || mediaRejectMatch) {
     const member = interaction.member as GuildMember | null;
-    if (!isStaff(member)) {
+    if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
       await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
       return;
     }
@@ -213,7 +210,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   await interaction.deferReply({ flags: 64 });
 
   const member = interaction.member as GuildMember | null;
-  if (!isStaff(member)) {
+  if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
     await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ押せます。");
     return;
   }
@@ -468,7 +465,8 @@ async function handleProductSelection(interaction: ButtonInteraction) {
   }
 
   try {
-    const channelId = await createTicketChannel(interaction.guild, interaction.user, pending.mcid, pending.purchaseId, product);
+    const _s = await getGuildSettings(interaction.guild.id);
+    const channelId = await createTicketChannel(interaction.guild, interaction.user, pending.mcid, pending.purchaseId, product, getPurchaseCtx(_s));
     clearRankPending(interaction.user.id);
     await interaction.editReply(`✅ チケットを作成しました！スタッフが確認次第ロールが付与されます。\n<#${channelId}>`);
   } catch (err) {
@@ -555,7 +553,8 @@ async function handleKeyNoMore(interaction: ButtonInteraction, targetUserId: str
   }
 
   try {
-    const channelId = await createKeyTicketChannel(interaction.guild, interaction.user, pending.mcid, pending.items);
+    const _s = await getGuildSettings(interaction.guild.id);
+    const channelId = await createKeyTicketChannel(interaction.guild, interaction.user, pending.mcid, pending.items, getPurchaseCtx(_s));
     clearKeyPending(interaction.user.id);
     await interaction.editReply(`✅ チケットを作成しました！スタッフが確認次第対応します。\n<#${channelId}>`);
   } catch (err) {
@@ -642,7 +641,8 @@ async function handleMediaModalSubmit(interaction: ModalSubmitInteraction) {
   if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
 
   try {
-    const channelId = await createMediaTicketChannel(interaction.guild, interaction.user, mcid, youtubeUrl);
+    const _s = await getGuildSettings(interaction.guild.id);
+    const channelId = await createMediaTicketChannel(interaction.guild, interaction.user, mcid, youtubeUrl, getPurchaseCtx(_s));
     await interaction.editReply(`✅ メディアランク申請チケットを作成しました！\n<#${channelId}>\nアナリティクス画面のスクリーンショットをチケット内に貼り付けてください。`);
   } catch (err) {
     logger.error({ err }, "Failed to create media ticket channel");
@@ -658,7 +658,8 @@ async function handleBugModalSubmit(interaction: ModalSubmitInteraction) {
   const bugContent = interaction.fields.getTextInputValue("bug_content_input").trim();
   if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
   try {
-    const channelId = await createBugTicketChannel(interaction.guild, interaction.user, mcid, bugContent);
+    const _s = await getGuildSettings(interaction.guild.id);
+    const channelId = await createBugTicketChannel(interaction.guild, interaction.user, mcid, bugContent, getSupportCtx(_s));
     await interaction.editReply(`✅ バグ報告チケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
   } catch (err) {
     logger.error({ err }, "Failed to create bug ticket channel");
@@ -675,7 +676,8 @@ async function handleReportModalSubmit(interaction: ModalSubmitInteraction) {
   const violationContent = interaction.fields.getTextInputValue("violation_input").trim();
   if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
   try {
-    const channelId = await createReportTicketChannel(interaction.guild, interaction.user, ownMcid, reportedMcid, violationContent);
+    const _s = await getGuildSettings(interaction.guild.id);
+    const channelId = await createReportTicketChannel(interaction.guild, interaction.user, ownMcid, reportedMcid, violationContent, getSupportCtx(_s));
     await interaction.editReply(`✅ プレイヤー通報チケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
   } catch (err) {
     logger.error({ err }, "Failed to create report ticket channel");
@@ -691,7 +693,8 @@ async function handleAppealModalSubmit(interaction: ModalSubmitInteraction) {
   const details = interaction.fields.getTextInputValue("appeal_detail_input").trim();
   if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
   try {
-    const channelId = await createAppealTicketChannel(interaction.guild, interaction.user, mcid, details);
+    const _s = await getGuildSettings(interaction.guild.id);
+    const channelId = await createAppealTicketChannel(interaction.guild, interaction.user, mcid, details, getSupportCtx(_s));
     await interaction.editReply(`✅ 異議申し立てチケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
   } catch (err) {
     logger.error({ err }, "Failed to create appeal ticket channel");
@@ -706,7 +709,8 @@ async function handleInquiryModalSubmit(interaction: ModalSubmitInteraction) {
   const content = interaction.fields.getTextInputValue("inquiry_content_input").trim();
   if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
   try {
-    const channelId = await createInquiryTicketChannel(interaction.guild, interaction.user, content);
+    const _s = await getGuildSettings(interaction.guild.id);
+    const channelId = await createInquiryTicketChannel(interaction.guild, interaction.user, content, getSupportCtx(_s));
     await interaction.editReply(`✅ お問い合わせチケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
   } catch (err) {
     logger.error({ err }, "Failed to create inquiry ticket channel");
@@ -723,7 +727,7 @@ async function handleCloseTicket(
   await interaction.deferReply({ flags: 64 });
 
   const member = interaction.member as GuildMember | null;
-  if (!isStaff(member)) {
+  if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
     await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ操作できます。");
     return;
   }
@@ -775,12 +779,13 @@ async function handleCloseTicket(
       await sendDM(targetMember, dmEmbed);
     }
 
-    const logChannelId = botConfig.supportLogChannelId || botConfig.ticketLogChannelId;
+    const _settings = await getGuildSettings((interaction.guild as Guild).id);
+    const supportLogId = getSupportCtx(_settings).logChannelId || botConfig.supportLogChannelId || botConfig.ticketLogChannelId;
     await sendTicketTranscriptLog(
       interaction.guild as Guild | null,
       channel,
       targetUserId,
-      logChannelId,
+      supportLogId,
       `✅ チケットクローズ — ${label}対応済み`,
       [
         { name: "✅ 対応スタッフ", value: `<@${interaction.user.id}>`, inline: true },
@@ -883,7 +888,7 @@ async function handleRejectReasonSubmit(
   await interaction.deferReply({ flags: 64 });
 
   const member = interaction.member as GuildMember | null;
-  if (!isStaff(member)) {
+  if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
     await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ操作できます。");
     return;
   }
@@ -1062,7 +1067,7 @@ async function handleGrantComplete(interaction: ButtonInteraction) {
   await interaction.deferReply({ flags: 64 });
 
   const member = interaction.member as GuildMember | null;
-  if (!isStaff(member)) {
+  if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
     await interaction.editReply("❌ このボタンはスタッフロールを持つメンバーのみ押せます。");
     return;
   }
@@ -1124,7 +1129,9 @@ async function sendApprovalNotification(
   ticketChannelId?: string
 ) {
   try {
-    const ch = await guild.channels.fetch(botConfig.approvalChannelId);
+    const _s = await getGuildSettings(guild.id);
+    const approvalChId = getPurchaseCtx(_s).approvalChannelId || botConfig.approvalChannelId;
+    const ch = await guild.channels.fetch(approvalChId);
     if (!ch || !(ch instanceof TextChannel)) return;
 
     const embed = new EmbedBuilder().setColor(color)
@@ -1155,7 +1162,9 @@ async function sendKeyApprovalNotification(
   ticketChannelId?: string
 ) {
   try {
-    const ch = await guild.channels.fetch(botConfig.approvalChannelId);
+    const _s = await getGuildSettings(guild.id);
+    const approvalChId = getPurchaseCtx(_s).approvalChannelId || botConfig.approvalChannelId;
+    const ch = await guild.channels.fetch(approvalChId);
     if (!ch || !(ch instanceof TextChannel)) return;
 
     const embed = new EmbedBuilder().setColor(color)
@@ -1380,16 +1389,17 @@ async function sendTicketTranscriptLog(
 }
 
 async function sendReceiptLog(guild: Guild | null, channel: TextChannel | null, userId: string): Promise<void> {
-  await sendTicketTranscriptLog(
-    guild, channel, userId,
-    botConfig.ticketLogChannelId,
-    "✅ チケットクローズ — 受け取り確認完了",
-  );
+  const logId = guild
+    ? (getPurchaseCtx(await getGuildSettings(guild.id)).logChannelId || botConfig.ticketLogChannelId)
+    : botConfig.ticketLogChannelId;
+  await sendTicketTranscriptLog(guild, channel, userId, logId, "✅ チケットクローズ — 受け取り確認完了");
 }
 
 async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: string, type: string, reason: string) {
   try {
-    const ch = await guild.channels.fetch(botConfig.ticketLogChannelId);
+    const _s = await getGuildSettings(guild.id);
+    const logId = getPurchaseCtx(_s).logChannelId || botConfig.ticketLogChannelId;
+    const ch = await guild.channels.fetch(logId);
     if (!ch || !(ch instanceof TextChannel)) return;
 
     await ch.send({
@@ -1407,14 +1417,9 @@ async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: str
   }
 }
 
-function isModRole(member: GuildMember | null): boolean {
-  if (!member) return false;
-  return member.roles.cache.has(botConfig.subStaffRoleId);
-}
-
 async function handleCloseCommand(interaction: ChatInputCommandInteraction) {
   const member = interaction.member as GuildMember | null;
-  if (!isStaff(member)) {
+  if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
     await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
     return;
   }
@@ -1448,9 +1453,10 @@ async function sendCloseLog(
   const isPurchase = PURCHASE_PREFIXES.some((p) => chName.startsWith(p));
   if (!isSupport && !isPurchase) return; // not a known ticket channel
 
+  const settings = await getGuildSettings(guild.id);
   const logChannelId = isSupport
-    ? (botConfig.supportLogChannelId || botConfig.ticketLogChannelId)
-    : botConfig.ticketLogChannelId;
+    ? (getSupportCtx(settings).logChannelId || botConfig.supportLogChannelId || botConfig.ticketLogChannelId)
+    : (getPurchaseCtx(settings).logChannelId || botConfig.ticketLogChannelId);
 
   try {
     const logCh = await guild.channels.fetch(logChannelId);
@@ -1475,7 +1481,7 @@ async function sendCloseLog(
 
 async function handleTicketAddCommand(interaction: ChatInputCommandInteraction) {
   const member = interaction.member as GuildMember | null;
-  if (!isStaff(member)) {
+  if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
     await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
     return;
   }

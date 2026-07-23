@@ -9,18 +9,14 @@ import {
   TextChannel,
 } from "discord.js";
 import { botConfig } from "./config.js";
+import { isStaffInGuild } from "./guildConfig.js";
 import { logger } from "../lib/logger.js";
-
-function hasSendRole(member: GuildMember | null): boolean {
-  if (!member) return false;
-  return member.roles.cache.has(botConfig.subStaffRoleId);
-}
 
 export async function handleTicketPanelSendCommand(
   interaction: ChatInputCommandInteraction
 ): Promise<void> {
   const member = interaction.member as GuildMember | null;
-  if (!hasSendRole(member)) {
+  if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
     await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
     return;
   }
@@ -92,7 +88,7 @@ export async function handlePurchaseSendCommand(
   interaction: ChatInputCommandInteraction
 ): Promise<void> {
   const member = interaction.member as GuildMember | null;
-  if (!hasSendRole(member)) {
+  if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
     await interaction.reply({ content: "❌ このコマンドはスタッフロールを持つメンバーのみ使用できます。", flags: 64 });
     return;
   }

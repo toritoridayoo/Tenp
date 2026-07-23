@@ -15,17 +15,23 @@ export const botConfig = {
 };
 
 export function validateBotConfig(): boolean {
-  const missing: string[] = [];
-  if (!botConfig.guildId)            missing.push("DISCORD_GUILD_ID");
-  if (!botConfig.ticketChannelId)    missing.push("DISCORD_TICKET_CHANNEL_ID");
-  if (!botConfig.staffRoleId)        missing.push("DISCORD_STAFF_ROLE_ID");
-  if (!botConfig.grantRoleId)        missing.push("DISCORD_GRANT_ROLE_ID");
-  if (!botConfig.mediaGrantRoleId)   missing.push("DISCORD_MEDIA_GRANT_ROLE_ID");
-  if (!botConfig.ticketLogChannelId) missing.push("DISCORD_TICKET_LOG_CHANNEL_ID");
-  if (!botConfig.approvalChannelId)  missing.push("DISCORD_APPROVAL_CHANNEL_ID");
-  if (missing.length > 0) {
-    console.error(`Missing env vars: ${missing.join(", ")}`);
+  // Only DISCORD_GUILD_ID is strictly required; all other settings can be
+  // configured per-server via /panel_settings.
+  if (!botConfig.guildId) {
+    console.error("Missing required env var: DISCORD_GUILD_ID");
     return false;
+  }
+  const optional = [
+    ["DISCORD_TICKET_CHANNEL_ID", botConfig.ticketChannelId],
+    ["DISCORD_STAFF_ROLE_ID", botConfig.staffRoleId],
+    ["DISCORD_GRANT_ROLE_ID", botConfig.grantRoleId],
+    ["DISCORD_MEDIA_GRANT_ROLE_ID", botConfig.mediaGrantRoleId],
+    ["DISCORD_TICKET_LOG_CHANNEL_ID", botConfig.ticketLogChannelId],
+    ["DISCORD_APPROVAL_CHANNEL_ID", botConfig.approvalChannelId],
+  ];
+  const missing = optional.filter(([, v]) => !v).map(([k]) => k);
+  if (missing.length > 0) {
+    console.warn(`Optional env vars not set (use /panel_settings to configure): ${missing.join(", ")}`);
   }
   return true;
 }
