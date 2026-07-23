@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
@@ -146,8 +147,36 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
     }
     await interaction.deferReply({ flags: 64 });
     await interaction.message.edit({ components: [] });
-    await closeTicketChannel(interaction.channel as TextChannel | null, receiptUserId, "受け取り確認完了");
+    const ticketCh = interaction.channel as TextChannel | null;
+    await sendReceiptLog(interaction.guild as Guild | null, ticketCh, receiptUserId);
+    await closeTicketChannel(ticketCh, receiptUserId, "受け取り確認完了");
     await interaction.editReply("✅ 受け取り確認が完了しました。チケットをクローズします。");
+    return;
+  }
+
+  // Key assign (staff in approval channel assigns themselves to ticket)
+  const keyAssignMatch = customId.match(/^key_assign_(\d+)$/);
+  if (keyAssignMatch) {
+    const member = interaction.member as GuildMember | null;
+    if (!isStaff(member)) {
+      await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
+      return;
+    }
+    await interaction.deferReply({ flags: 64 });
+    await handleKeyAssign(interaction, keyAssignMatch[1]!);
+    return;
+  }
+
+  // Key grant confirm (in ticket channel after staff assigned)
+  const keyGrantConfirmMatch = customId.match(/^key_grant_confirm_(\d+)$/);
+  if (keyGrantConfirmMatch) {
+    const member = interaction.member as GuildMember | null;
+    if (!isStaff(member)) {
+      await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
+      return;
+    }
+    await interaction.deferReply({ flags: 64 });
+    await handleKeyGrantConfirm(interaction, keyGrantConfirmMatch[1]!);
     return;
   }
 
@@ -808,6 +837,20 @@ async function handleRankApprove(
       ).setTimestamp()
     );
     await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id, 0x00BFFF, interaction.channelId);
+
+    // チケットに確認メッセージを送信
+    if (interaction.channel instanceof TextChannel) {
+      await interaction.channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(Colors.Green)
+            .setTitle("✅ 購入が確認されました")
+            .setDescription("購入が確認されました！ゲーム内での付与までお待ちください。\n付与完了後、受け取り確認ボタンが表示されます。")
+            .setTimestamp()
+        ],
+      });
+    }
+
     await interaction.editReply(`✅ <@${targetUserId}> を承認しました。ゲーム内付与後に付与完了ボタンを押してください。`);
     logger.info({ targetUserId, durationType, mcid, grantedBy: interaction.user.id }, "Rank role granted");
   } catch (err) {
@@ -882,36 +925,50 @@ async function handleRejectReasonSubmit(
 async function handleKeyApprove(interaction: ButtonInteraction, targetUserId: string) {
   try {
     const mcid = extractField(interaction, "Minecraft ID");
+    const itemFields = interaction.message.embeds[0]!.fields;
 
     await interaction.message.edit({
       embeds: [
-        new EmbedBuilder().setColor(Colors.Green).setTitle("✅ 確認完了 — チケット終了")
+        new EmbedBuilder().setColor(Colors.Green).setTitle("✅ 購入確認完了 — 担当スタッフ待機中")
           .addFields(
             { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
             { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``, inline: true },
-            { name: "対応スタッフ", value: `<@${interaction.user.id}>`, inline: true },
-            ...interaction.message.embeds[0]!.fields.filter((f) =>
-              f.name.startsWith("📦 アイテム")
-            ),
+            { name: "確認スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+            ...itemFields.filter((f) => f.name.startsWith("📦 アイテム")),
           ).setTimestamp()
       ],
       components: [],
     });
 
-    await sendKeyApprovalNotification(interaction.guild as Guild, targetUserId, mcid ?? "不明", interaction.message.embeds[0]!.fields, interaction.user.id, 0x00BFFF, interaction.channelId);
+    // チケットに確認メッセージを送信
+    if (interaction.channel instanceof TextChannel) {
+      await interaction.channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(Colors.Green)
+            .setTitle("✅ 購入が確認されました")
+            .setDescription("購入が確認されました！付与担当スタッフがチケットに参加するまでお待ちください。")
+            .setTimestamp()
+        ],
+      });
+    }
+
+    // 承認チャンネルに「付与する」ボタンを送信
+    await sendKeyApprovalNotification(interaction.guild as Guild, targetUserId, mcid ?? "不明", itemFields, interaction.user.id, 0x00BFFF, interaction.channelId);
+
     const keyTargetMember = await (interaction.guild as Guild).members.fetch(targetUserId).catch(() => null);
     if (keyTargetMember) {
-      const itemSummary = interaction.message.embeds[0]!.fields
+      const itemSummary = itemFields
         .filter((f) => f.name.startsWith("📦 アイテム"))
         .map((f) => f.value).join("\n");
       await sendDM(keyTargetMember, new EmbedBuilder()
         .setColor(Colors.Green).setTitle("✅ 鍵・シャード申請が承認されました")
-        .setDescription(`あなたの鍵・シャード受け取り申請が承認されました！`)
+        .setDescription("あなたの鍵・シャード受け取り申請が承認されました！担当スタッフがチケットに参加します。")
         .addFields({ name: "📦 申請内容", value: itemSummary || "詳細はチケットをご確認ください", inline: false })
         .setTimestamp()
       );
     }
-    await interaction.editReply(`✅ <@${targetUserId}> の鍵・シャード付与を確認しました。ゲーム内付与後に付与完了ボタンを押してください。`);
+    await interaction.editReply(`✅ <@${targetUserId}> の購入を確認しました。承認チャンネルで付与担当を決定してください。`);
     logger.info({ targetUserId }, "Key ticket approved");
   } catch (err) {
     logger.error({ err }, "Failed to approve key ticket");
@@ -963,6 +1020,20 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
       .addFields({ name: "⏰ 期限", value: expiresAt.toLocaleDateString("ja-JP"), inline: true })
       .setTimestamp()
     );
+
+    // チケットに確認メッセージを送信
+    if (interaction.channel instanceof TextChannel) {
+      await interaction.channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(Colors.Green)
+            .setTitle("✅ 購入が確認されました")
+            .setDescription("購入が確認されました！ゲーム内での付与までお待ちください。\n付与完了後、受け取り確認ボタンが表示されます。")
+            .setTimestamp()
+        ],
+      });
+    }
+
     await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を承認し、ロールを付与しました（1ヶ月）。ゲーム内付与後に付与完了ボタンを押してください。`);
     logger.info({ targetUserId, mcid, expiresAt }, "Media ticket approved");
   } catch (err) {
@@ -1086,12 +1157,172 @@ async function sendKeyApprovalNotification(
       ).setTimestamp();
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId(`grant_complete_${targetUserId}`).setLabel("✅ ゲーム内付与完了").setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId(`key_assign_${targetUserId}`).setLabel("🔑 付与する").setStyle(ButtonStyle.Primary)
     );
 
     await ch.send({ embeds: [embed], components: [row] });
   } catch (err) {
     logger.error({ err }, "Failed to send key approval notification");
+  }
+}
+
+// ── Key: assign staff to ticket ───────────────────────────────────────────
+
+async function handleKeyAssign(interaction: ButtonInteraction, targetUserId: string) {
+  try {
+    const ticketMention = interaction.message.embeds[0]?.fields.find((f) => f.name === "🎫 チケット")?.value;
+    const ticketChannelId = ticketMention?.match(/(\d+)/)?.[1];
+
+    if (!ticketChannelId) {
+      await interaction.editReply("❌ チケットチャンネルが見つかりませんでした。");
+      return;
+    }
+
+    const ticketCh = await interaction.guild?.channels.fetch(ticketChannelId).catch(() => null);
+    if (!(ticketCh instanceof TextChannel)) {
+      await interaction.editReply("❌ チケットチャンネルを取得できませんでした。");
+      return;
+    }
+
+    // スタッフをチケットチャンネルに追加
+    await ticketCh.permissionOverwrites.edit(interaction.user.id, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true,
+      AttachFiles: true,
+    });
+
+    // 承認チャンネルのメッセージを更新
+    await interaction.message.edit({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.Blue)
+          .setTitle("🔑 鍵・シャード付与 — 担当スタッフ決定")
+          .addFields(
+            ...interaction.message.embeds[0]!.fields,
+            { name: "🧑‍💼 担当スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+          )
+          .setTimestamp()
+      ],
+      components: [],
+    });
+
+    // チケット内にembedと付与確認ボタンを送信
+    const grantRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`key_grant_confirm_${targetUserId}`)
+        .setLabel("✅ ゲーム内付与完了")
+        .setStyle(ButtonStyle.Success)
+    );
+
+    await ticketCh.send({
+      content: `<@${targetUserId}>`,
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.Blue)
+          .setTitle("🔑 付与担当スタッフが決まりました")
+          .setDescription(`<@${interaction.user.id}> がゲーム内での付与を担当します。\nゲーム内での付与が完了したら下のボタンを押してください。`)
+          .addFields({ name: "🧑‍💼 担当スタッフ", value: `<@${interaction.user.id}>`, inline: true })
+          .setTimestamp()
+      ],
+      components: [grantRow],
+    });
+
+    await interaction.editReply(`✅ <@${targetUserId}> のチケットに追加しました。ゲーム内で付与後、チケット内のボタンを押してください。`);
+    logger.info({ targetUserId, assignedStaff: interaction.user.id, ticketChannelId }, "Key staff assigned to ticket");
+  } catch (err) {
+    logger.error({ err }, "Failed to handle key assign");
+    await interaction.editReply("❌ エラーが発生しました。");
+  }
+}
+
+// ── Key: grant confirm ────────────────────────────────────────────────────
+
+async function handleKeyGrantConfirm(interaction: ButtonInteraction, targetUserId: string) {
+  try {
+    const originalEmbed = interaction.message.embeds[0];
+
+    await interaction.message.edit({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.DarkGreen)
+          .setTitle("✅ ゲーム内付与完了")
+          .setDescription("ゲーム内での付与が完了しました。")
+          .addFields(
+            ...(originalEmbed?.fields ?? []),
+            { name: "✅ 完了スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "完了時刻", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+          )
+          .setTimestamp()
+      ],
+      components: [],
+    });
+
+    const receiptRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`user_receipt_${targetUserId}`)
+        .setLabel("✅ 商品を受け取りました")
+        .setStyle(ButtonStyle.Success)
+    );
+
+    await (interaction.channel as TextChannel).send({
+      content: `<@${targetUserId}>`,
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.Gold)
+          .setTitle("📦 商品の受け取り確認")
+          .setDescription("ゲーム内での付与が完了しました。\n商品を受け取ったことを確認したら下のボタンを押してください。\nボタンを押すとチケットがクローズされます。")
+          .setTimestamp()
+      ],
+      components: [receiptRow],
+    });
+
+    await interaction.editReply("✅ 受け取り確認ボタンを送信しました。");
+    logger.info({ targetUserId, completedBy: interaction.user.id }, "Key grant confirmed");
+  } catch (err) {
+    logger.error({ err }, "Failed to handle key grant confirm");
+    await interaction.editReply("❌ エラーが発生しました。");
+  }
+}
+
+// ── Receipt log (with txt transcript) ────────────────────────────────────
+
+async function sendReceiptLog(guild: Guild | null, channel: TextChannel | null, userId: string): Promise<void> {
+  if (!guild || !channel) return;
+  try {
+    const logCh = await guild.channels.fetch(botConfig.ticketLogChannelId);
+    if (!(logCh instanceof TextChannel)) return;
+
+    // メッセージをすべて取得（最大100件）
+    const messages = await channel.messages.fetch({ limit: 100 });
+    const sorted = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+    const lines = sorted.map((msg) => {
+      const time = new Date(msg.createdTimestamp).toLocaleString("ja-JP");
+      const content =
+        msg.content ||
+        (msg.embeds.length > 0 ? `[embed: ${msg.embeds[0]?.title ?? "（タイトルなし）"}]` : "[添付ファイル]");
+      return `[${time}] ${msg.author.tag}: ${content}`;
+    });
+
+    const txtContent = lines.join("\n");
+    const attachment = new AttachmentBuilder(Buffer.from(txtContent, "utf-8"), {
+      name: `${channel.name}.txt`,
+    });
+
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Green)
+      .setTitle("✅ チケットクローズ — 受け取り確認完了")
+      .addFields(
+        { name: "📁 チャンネル", value: `#${channel.name}`, inline: true },
+        { name: "👤 申請者", value: `<@${userId}>`, inline: true },
+      )
+      .setTimestamp()
+      .setFooter({ text: `チャンネルID: ${channel.id}` });
+
+    await logCh.send({ embeds: [embed], files: [attachment] });
+  } catch (err) {
+    logger.error({ err }, "Failed to send receipt log");
   }
 }
 
