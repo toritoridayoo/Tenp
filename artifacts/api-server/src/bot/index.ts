@@ -97,6 +97,26 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .toJSON(),
   new SlashCommandBuilder()
+    .setName("media_autorank_settings")
+    .setDescription("メディアランク自動付与のRCON設定を行います（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("media_autorank_status")
+    .setDescription("メディアランク自動付与モードのON/OFFを切り替えます（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addBooleanOption((o) =>
+      o.setName("status")
+        .setDescription("true = 自動付与ON、false = 手動付与")
+        .setRequired(true)
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("media_autorank_settings_view")
+    .setDescription("現在のメディアランク自動付与設定を表示します（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName("autorank_status")
     .setDescription("自動ランク付与モードのON/OFFを切り替えます（管理者専用）")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)

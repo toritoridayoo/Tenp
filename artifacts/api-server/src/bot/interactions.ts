@@ -27,8 +27,10 @@ import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panel
 import { handlePanelSettingsSet, handlePanelSettingsView } from "./panelSettingsCommand.js";
 import { setStaffAppOpen, isRequestCloseEnabled, setRequestCloseEnabled } from "./staffAppStatus.js";
 import {
-  getAutorankSettings, isAutorankEnabled, saveAutorankSettings,
-  setAutorankEnabled, grantMinecraftRank,
+  getAutorankSettings, isAutorankEnabled, isMediaAutorankEnabled,
+  saveAutorankSettings, saveMediaAutorankSettings,
+  setAutorankEnabled, setMediaAutorankEnabled,
+  grantMinecraftRank, grantMinecraftMediaRank,
   type AutorankSettingsData,
 } from "./autorankSettings.js";
 import { isStaffInGuild, getGuildSettings, getPurchaseCtx, getSupportCtx } from "./guildConfig.js";
@@ -81,9 +83,12 @@ export async function handleInteraction(interaction: Interaction) {
     if (interaction.commandName === "requestclose") {
       await handleRequestCloseCommand(interaction);
     }
-    if (interaction.commandName === "autorank_settings")      await handleAutorankSettingsCommand(interaction);
-    if (interaction.commandName === "autorank_status")        await handleAutorankStatusCommand(interaction);
-    if (interaction.commandName === "autorank_settings_view") await handleAutorankSettingsViewCommand(interaction);
+    if (interaction.commandName === "autorank_settings")            await handleAutorankSettingsCommand(interaction);
+    if (interaction.commandName === "autorank_status")              await handleAutorankStatusCommand(interaction);
+    if (interaction.commandName === "autorank_settings_view")       await handleAutorankSettingsViewCommand(interaction);
+    if (interaction.commandName === "media_autorank_settings")      await handleMediaAutorankSettingsCommand(interaction);
+    if (interaction.commandName === "media_autorank_status")        await handleMediaAutorankStatusCommand(interaction);
+    if (interaction.commandName === "media_autorank_settings_view") await handleMediaAutorankSettingsViewCommand(interaction);
     return;
   }
   if (interaction.isButton()) {
@@ -476,7 +481,8 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   if (interaction.customId === "appeal_modal")  { await handleAppealModalSubmit(interaction);  return; }
   if (interaction.customId === "inquiry_modal") { await handleInquiryModalSubmit(interaction); return; }
 
-  if (interaction.customId === "autorank_settings_modal") { await handleAutorankSettingsModalSubmit(interaction); return; }
+  if (interaction.customId === "autorank_settings_modal")       { await handleAutorankSettingsModalSubmit(interaction);      return; }
+  if (interaction.customId === "media_autorank_settings_modal") { await handleMediaAutorankSettingsModalSubmit(interaction); return; }
 
   // Reject reason modals: reject_reason_{type}_{userId}_{messageId}
   const rejectModal = interaction.customId.match(/^reject_reason_(rank|key|media)_(\d+)_(\d+)$/);
@@ -1124,6 +1130,20 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
 
     await targetMember.roles.add(botConfig.mediaGrantRoleId, "メディアランク承認");
 
+    // 自動付与モードなら RCON でゲーム内ランクも付与
+    const mediaAutorankOn  = await isMediaAutorankEnabled(guild.id);
+    const autorankCfg      = mediaAutorankOn ? await getAutorankSettings(guild.id) : null;
+    let rconNote = "";
+    if (mediaAutorankOn && autorankCfg?.commandMedia && mcid) {
+      try {
+        await grantMinecraftMediaRank(mcid, autorankCfg);
+        rconNote = "✅ ゲーム内ランク自動付与済み";
+      } catch (rconErr) {
+        logger.error({ rconErr }, "RCON failed during media rank approve");
+        rconNote = "⚠️ RCON接続エラー（ゲーム内付与は手動確認が必要です）";
+      }
+    }
+
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     await db.insert(roleGrantsTable).values({
       guildId: guild.id, userId: targetUserId, roleId: botConfig.mediaGrantRoleId,
@@ -1135,11 +1155,12 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
       embeds: [
         new EmbedBuilder().setColor(Colors.Green).setTitle("✅ メディアランク承認 — チケット終了")
           .addFields(
-            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
-            { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``, inline: true },
-            { name: "承認スタッフ", value: `<@${interaction.user.id}>`, inline: true },
-            { name: "⏰ 期限", value: expiresAt.toLocaleDateString("ja-JP"), inline: true },
-            { name: "▶️ YouTube URL", value: youtubeUrl ?? "不明", inline: false }
+            { name: "👤 申請者",      value: `<@${targetUserId}>`,               inline: true },
+            { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``,           inline: true },
+            { name: "承認スタッフ",    value: `<@${interaction.user.id}>`,        inline: true },
+            { name: "⏰ 期限",         value: expiresAt.toLocaleDateString("ja-JP"), inline: true },
+            { name: "▶️ YouTube URL",  value: youtubeUrl ?? "不明",              inline: false },
+            ...(rconNote ? [{ name: "🎮 ゲーム内付与", value: rconNote, inline: false }] : []),
           ).setTimestamp()
       ],
       components: [],
@@ -1148,26 +1169,49 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
     await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", "メディアランク 📺", false, expiresAt, interaction.user.id, Colors.Red, interaction.channelId);
     await sendDM(targetMember, new EmbedBuilder()
       .setColor(Colors.Green).setTitle("✅ メディアランク申請が承認されました")
-      .setDescription("あなたのメディアランク申請が承認されました！")
+      .setDescription(mediaAutorankOn
+        ? "申請が承認され、Discordロールとゲーム内ランクが付与されました！"
+        : "あなたのメディアランク申請が承認されました！")
       .addFields({ name: "⏰ 期限", value: expiresAt.toLocaleDateString("ja-JP"), inline: true })
       .setTimestamp()
     );
 
-    // チケットに確認メッセージを送信
     if (interaction.channel instanceof TextChannel) {
-      await interaction.channel.send({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(Colors.Green)
-            .setTitle("✅ 購入が確認されました")
-            .setDescription("購入が確認されました！ゲーム内での付与までお待ちください。\n付与完了後、受け取り確認ボタンが表示されます。")
-            .setTimestamp()
-        ],
-      });
+      if (mediaAutorankOn) {
+        const receiptRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`user_receipt_${targetUserId}`)
+            .setLabel("✅ 受け取り確認")
+            .setStyle(ButtonStyle.Success),
+        );
+        await interaction.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(Colors.Green)
+              .setTitle("✅ 申請確認・メディアランク自動付与完了")
+              .setDescription(
+                `申請が確認され、Discordロールとゲーム内ランクが自動で付与されました！\n${rconNote}\n\n受け取りを確認したら下のボタンを押してください。`
+              )
+              .setTimestamp()
+          ],
+          components: [receiptRow],
+        });
+        await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を承認しました。自動付与完了。${rconNote}`);
+      } else {
+        await interaction.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(Colors.Green)
+              .setTitle("✅ 申請が確認されました")
+              .setDescription("申請が確認されました！ゲーム内での付与までお待ちください。\n付与完了後、受け取り確認ボタンが表示されます。")
+              .setTimestamp()
+          ],
+        });
+        await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を承認し、ロールを付与しました（1ヶ月）。ゲーム内付与後に付与完了ボタンを押してください。`);
+      }
     }
 
-    await interaction.editReply(`✅ <@${targetUserId}> のメディアランク申請を承認し、ロールを付与しました（1ヶ月）。ゲーム内付与後に付与完了ボタンを押してください。`);
-    logger.info({ targetUserId, mcid, expiresAt }, "Media ticket approved");
+    logger.info({ targetUserId, mcid, expiresAt, mediaAutorankOn }, "Media ticket approved");
   } catch (err) {
     logger.error({ err }, "Failed to approve media ticket");
     await interaction.editReply("❌ 処理中にエラーが発生しました。");
@@ -1893,6 +1937,163 @@ async function handleAutorankSettingsViewCommand(interaction: ChatInputCommandIn
           { name: "🔑 RCONパスワード",  value: "••••••••",                      inline: true },
           { name: "♾️ 永久版コマンド",  value: `\`${settings.commandPermanent}\``, inline: false },
           { name: "⏰ 1ヶ月版コマンド", value: `\`${settings.command1month}\``,    inline: false },
+        )
+        .setTimestamp()
+    ],
+  });
+}
+
+// ── Media autorank: modal builder ─────────────────────────────────────────
+
+function buildMediaAutorankSettingsModal(prefill?: AutorankSettingsData | null): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId("media_autorank_settings_modal")
+    .setTitle("🔧 メディアランク自動付与設定（RCON）");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("rcon_host").setLabel("RCONホスト（IPまたはドメイン）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: mc.example.com")
+        .setValue(prefill?.rconHost ?? "").setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("rcon_port").setLabel("RCONポート番号")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: 25575")
+        .setValue(prefill?.rconPort?.toString() ?? "25575").setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("rcon_password").setLabel("RCONパスワード")
+        .setStyle(TextInputStyle.Short).setPlaceholder("server.properties の rcon.password")
+        .setValue(prefill?.rconPassword ?? "").setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("cmd_media")
+        .setLabel("メディアランクコマンド（{mcid} がIDに置換されます）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus-media")
+        .setValue(prefill?.commandMedia ?? "").setRequired(true)
+    ),
+  );
+  return modal;
+}
+
+// ── /media_autorank_settings — show modal ─────────────────────────────────
+
+async function handleMediaAutorankSettingsCommand(interaction: ChatInputCommandInteraction) {
+  if (!assertAdmin(interaction)) return;
+  const settings = await getAutorankSettings(interaction.guildId!);
+  await interaction.showModal(buildMediaAutorankSettingsModal(settings));
+}
+
+// ── media_autorank_settings_modal submit ──────────────────────────────────
+
+async function handleMediaAutorankSettingsModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+
+  const host    = interaction.fields.getTextInputValue("rcon_host").trim();
+  const portStr = interaction.fields.getTextInputValue("rcon_port").trim();
+  const pass    = interaction.fields.getTextInputValue("rcon_password").trim();
+  const cmdMedia = interaction.fields.getTextInputValue("cmd_media").trim();
+
+  const port = parseInt(portStr, 10);
+  if (isNaN(port) || port < 1 || port > 65535) {
+    await interaction.editReply("❌ ポート番号が無効です（1〜65535 の整数を入力してください）。");
+    return;
+  }
+
+  try {
+    await saveMediaAutorankSettings(interaction.guildId!, host, port, pass, cmdMedia);
+
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.Green)
+          .setTitle("✅ メディアランク自動付与設定を保存しました")
+          .addFields(
+            { name: "🌐 RCONホスト",       value: host,                  inline: true },
+            { name: "🔌 RCONポート",        value: port.toString(),        inline: true },
+            { name: "🔑 RCONパスワード",    value: "••••••••（保存済み）",  inline: true },
+            { name: "📺 メディアコマンド",   value: `\`${cmdMedia}\``,      inline: false },
+          )
+          .setDescription("有効にするには `/media_autorank_status status:true` を実行してください。")
+          .setTimestamp()
+      ],
+    });
+  } catch (err) {
+    logger.error({ err }, "Failed to save media autorank settings");
+    await interaction.editReply("❌ 設定の保存に失敗しました。");
+  }
+}
+
+// ── /media_autorank_status ────────────────────────────────────────────────
+
+async function handleMediaAutorankStatusCommand(interaction: ChatInputCommandInteraction) {
+  if (!assertAdmin(interaction)) return;
+
+  const status  = interaction.options.getBoolean("status", true);
+  const guildId = interaction.guildId!;
+  await interaction.deferReply({ flags: 64 });
+
+  try {
+    if (status) {
+      const settings = await getAutorankSettings(guildId);
+      if (!settings?.commandMedia) {
+        await interaction.editReply(
+          "❌ メディアランクのRCON設定が未完了です。先に `/media_autorank_settings` で設定してください。"
+        );
+        return;
+      }
+    }
+
+    await setMediaAutorankEnabled(guildId, status);
+    await interaction.editReply(
+      status
+        ? "✅ メディアランク自動付与モードを **ON** にしました。承認後、自動でDiscordロール＋ゲーム内ランクが付与されます。"
+        : "🔒 メディアランク自動付与モードを **OFF** にしました。手動付与（付与完了ボタン制）に戻りました。"
+    );
+  } catch (err) {
+    logger.error({ err }, "Failed to set media autorank status");
+    await interaction.editReply("❌ 設定の変更に失敗しました。");
+  }
+}
+
+// ── /media_autorank_settings_view ─────────────────────────────────────────
+
+async function handleMediaAutorankSettingsViewCommand(interaction: ChatInputCommandInteraction) {
+  if (!assertAdmin(interaction)) return;
+  await interaction.deferReply({ flags: 64 });
+
+  const [settings, enabled] = await Promise.all([
+    getAutorankSettings(interaction.guildId!),
+    isMediaAutorankEnabled(interaction.guildId!),
+  ]);
+
+  if (!settings?.commandMedia) {
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.Orange)
+          .setTitle("⚙️ メディアランク自動付与設定")
+          .setDescription("❌ まだ設定されていません。`/media_autorank_settings` で設定してください。")
+          .addFields({ name: "ステータス", value: "🔒 無効", inline: true }),
+      ],
+    });
+    return;
+  }
+
+  await interaction.editReply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(enabled ? Colors.Green : 0x888888)
+        .setTitle("⚙️ メディアランク自動付与設定")
+        .addFields(
+          { name: "🔄 ステータス",     value: enabled ? "✅ 有効（自動付与）" : "🔒 無効（手動付与）", inline: false },
+          { name: "🌐 RCONホスト",     value: settings.rconHost,              inline: true },
+          { name: "🔌 RCONポート",     value: settings.rconPort.toString(),    inline: true },
+          { name: "🔑 RCONパスワード", value: "••••••••",                      inline: true },
+          { name: "📺 メディアコマンド", value: `\`${settings.commandMedia}\``, inline: false },
         )
         .setTimestamp()
     ],

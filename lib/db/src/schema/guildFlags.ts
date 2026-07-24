@@ -4,7 +4,8 @@ export const guildFlagsTable = pgTable("guild_flags", {
   guildId: text("guild_id").primaryKey(),
   staffAppOpen: boolean("staff_app_open").notNull().default(true),
   requestCloseEnabled: boolean("request_close_enabled").notNull().default(true),
-  autorankEnabled: boolean("autorank_enabled").notNull().default(false),
+  autorankEnabled:      boolean("autorank_enabled").notNull().default(false),
+  mediaAutorankEnabled: boolean("media_autorank_enabled").notNull().default(false),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

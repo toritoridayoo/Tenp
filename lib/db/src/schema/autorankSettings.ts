@@ -7,6 +7,7 @@ export const autorankSettingsTable = pgTable("autorank_settings", {
   rconPassword:     text("rcon_password").notNull(),
   commandPermanent: text("command_permanent").notNull(),
   command1month:    text("command_1month").notNull(),
+  commandMedia:     text("command_media"),          // nullable — set via /media_autorank_settings
   updatedAt:        timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
