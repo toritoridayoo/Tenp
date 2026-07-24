@@ -181,7 +181,9 @@ export async function startBot(): Promise<void> {
   });
 
   client.on("interactionCreate", (interaction) => {
-    void handleInteraction(interaction);
+    handleInteraction(interaction).catch((err) => {
+      logger.error({ err }, "Unhandled error in interaction handler");
+    });
   });
 
   client.on("messageCreate", (message) => {
