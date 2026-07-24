@@ -534,75 +534,6 @@ async function handleProductSelection(interaction: ButtonInteraction) {
     return;
   }
 
-  // ── 自動付与モードのチェック ──────────────────────────────────────
-  if (await isAutorankEnabled(interaction.guild.id)) {
-    const autorankCfg = await getAutorankSettings(interaction.guild.id);
-    if (!autorankCfg) {
-      await interaction.editReply("❌ 自動ランク付与が有効ですが、RCON設定が未完了です。`/autorank_settings` で設定してください。");
-      return;
-    }
-
-    const permanent    = product === "permanent";
-    const expiresAt    = permanent ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    const productLabel = PRODUCT_LABELS[product];
-
-    try {
-      // Discord ロール付与
-      const targetMember = await interaction.guild.members.fetch(interaction.user.id);
-      if (botConfig.grantRoleId) {
-        await targetMember.roles.add(botConfig.grantRoleId, "Booth購入（自動付与）");
-      }
-
-      // Minecraft RCON コマンド実行
-      let rconResponse = "";
-      try {
-        rconResponse = await grantMinecraftRank(pending.mcid, product, autorankCfg);
-      } catch (rconErr) {
-        logger.error({ rconErr }, "RCON command failed during autorank");
-        rconResponse = "⚠️ RCON接続エラー（Discordロールは付与済み、ゲーム内付与は手動確認が必要です）";
-      }
-
-      // DB 記録
-      await db.insert(roleGrantsTable).values({
-        guildId:         interaction.guild.id,
-        userId:          interaction.user.id,
-        roleId:          botConfig.grantRoleId || "autorank",
-        purchaseId:      pending.purchaseId,
-        permanent,
-        expiresAt,
-        grantedBy:       "autorank",
-        removed:         false,
-      });
-
-      clearRankPending(interaction.user.id);
-
-      await interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(Colors.Green)
-            .setTitle("✅ ランクが自動付与されました！")
-            .addFields(
-              { name: "🎮 Minecraft ID",  value: `\`${pending.mcid}\``,      inline: true },
-              { name: "🧾 購入番号",       value: `\`${pending.purchaseId}\``, inline: true },
-              { name: "📦 商品",           value: productLabel,                inline: true },
-              { name: "付与期間",          value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true },
-            )
-            .setDescription("Discordロールとゲーム内ランクが付与されました！")
-            .setFooter({ text: rconResponse || "RCON: 完了" })
-            .setTimestamp()
-        ],
-        components: [],
-      });
-
-      logger.info({ userId: interaction.user.id, mcid: pending.mcid, product }, "Autorank granted");
-    } catch (err) {
-      logger.error({ err }, "Autorank grant failed");
-      await interaction.editReply("❌ 自動付与中にエラーが発生しました。スタッフにお問い合わせください。");
-    }
-    return;
-  }
-
-  // ── 通常チケット作成フロー ────────────────────────────────────────
   try {
     const _s = await getGuildSettings(interaction.guild.id);
     const channelId = await createTicketChannel(interaction.guild, interaction.user, pending.mcid, pending.purchaseId, product, getPurchaseCtx(_s));
@@ -968,6 +899,20 @@ async function handleRankApprove(
     const mcid         = extractField(interaction, "Minecraft ID");
     const purchaseId   = extractField(interaction, "購入番号");
 
+    // 自動付与モードなら RCON でゲーム内ランクも付与
+    const autorankOn  = await isAutorankEnabled(guild.id);
+    const autorankCfg = autorankOn ? await getAutorankSettings(guild.id) : null;
+    let rconNote = "";
+    if (autorankOn && autorankCfg && mcid) {
+      try {
+        await grantMinecraftRank(mcid, product, autorankCfg);
+        rconNote = "✅ ゲーム内ランク自動付与済み";
+      } catch (rconErr) {
+        logger.error({ rconErr }, "RCON failed during rank approve");
+        rconNote = "⚠️ RCON接続エラー（ゲーム内付与は手動確認が必要です）";
+      }
+    }
+
     await db.insert(roleGrantsTable).values({
       guildId: guild.id, userId: targetUserId, roleId: botConfig.grantRoleId,
       purchaseId: purchaseId ?? "unknown", permanent, expiresAt,
@@ -978,12 +923,13 @@ async function handleRankApprove(
       embeds: [
         new EmbedBuilder().setColor(Colors.Green).setTitle("✅ 承認済み — チケット終了")
           .addFields(
-            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
-            { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``, inline: true },
-            { name: "🧾 購入番号", value: `\`${purchaseId ?? "不明"}\``, inline: true },
-            { name: "📦 商品", value: productLabel, inline: true },
-            { name: "承認スタッフ", value: `<@${interaction.user.id}>`, inline: true },
-            { name: "付与期間", value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true }
+            { name: "👤 申請者",   value: `<@${targetUserId}>`,                    inline: true },
+            { name: "🎮 Minecraft ID", value: `\`${mcid ?? "不明"}\``,             inline: true },
+            { name: "🧾 購入番号", value: `\`${purchaseId ?? "不明"}\``,           inline: true },
+            { name: "📦 商品",     value: productLabel,                             inline: true },
+            { name: "承認スタッフ", value: `<@${interaction.user.id}>`,            inline: true },
+            { name: "付与期間",    value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true },
+            ...(rconNote ? [{ name: "🎮 ゲーム内付与", value: rconNote, inline: false }] : []),
           ).setTimestamp()
       ],
       components: [],
@@ -991,9 +937,11 @@ async function handleRankApprove(
 
     await sendDM(targetMember, new EmbedBuilder()
       .setColor(Colors.Green).setTitle("✅ ロール申請が承認されました")
-      .setDescription(`あなたのロール申請が承認されました！`)
+      .setDescription(autorankOn
+        ? "購入が確認され、Discordロールとゲーム内ランクが付与されました！"
+        : "あなたのロール申請が承認されました！")
       .addFields(
-        { name: "📦 商品", value: productLabel, inline: true },
+        { name: "📦 商品",  value: productLabel, inline: true },
         { name: "付与期間", value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true }
       ).setTimestamp()
     );
@@ -1001,19 +949,42 @@ async function handleRankApprove(
 
     // チケットに確認メッセージを送信
     if (interaction.channel instanceof TextChannel) {
-      await interaction.channel.send({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(Colors.Green)
-            .setTitle("✅ 購入が確認されました")
-            .setDescription("購入が確認されました！ゲーム内での付与までお待ちください。\n付与完了後、受け取り確認ボタンが表示されます。")
-            .setTimestamp()
-        ],
-      });
+      if (autorankOn) {
+        // 自動付与完了 → 受け取り確認ボタンを表示
+        const receiptRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`user_receipt_${targetUserId}`)
+            .setLabel("✅ 受け取り確認")
+            .setStyle(ButtonStyle.Success),
+        );
+        await interaction.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(Colors.Green)
+              .setTitle("✅ 購入確認・ランク自動付与完了")
+              .setDescription(
+                `購入が確認され、Discordロールとゲーム内ランクが自動で付与されました！\n${rconNote}\n\n受け取りを確認したら下のボタンを押してください。`
+              )
+              .setTimestamp()
+          ],
+          components: [receiptRow],
+        });
+        await interaction.editReply(`✅ <@${targetUserId}> を承認しました。自動付与完了。${rconNote}`);
+      } else {
+        await interaction.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(Colors.Green)
+              .setTitle("✅ 購入が確認されました")
+              .setDescription("購入が確認されました！ゲーム内での付与までお待ちください。\n付与完了後、受け取り確認ボタンが表示されます。")
+              .setTimestamp()
+          ],
+        });
+        await interaction.editReply(`✅ <@${targetUserId}> を承認しました。ゲーム内付与後に付与完了ボタンを押してください。`);
+      }
     }
 
-    await interaction.editReply(`✅ <@${targetUserId}> を承認しました。ゲーム内付与後に付与完了ボタンを押してください。`);
-    logger.info({ targetUserId, durationType, mcid, grantedBy: interaction.user.id }, "Rank role granted");
+    logger.info({ targetUserId, durationType, mcid, grantedBy: interaction.user.id, autorankOn }, "Rank role granted");
   } catch (err) {
     logger.error({ err }, "Failed to grant rank role");
     await interaction.editReply("❌ ロールの付与中にエラーが発生しました。");
