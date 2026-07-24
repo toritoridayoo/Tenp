@@ -13,6 +13,8 @@ export type AutorankSettingsData = {
   commandPermanent: string;
   command1month:    string;
   commandMedia:     string | null;
+  rankRoleId:       string | null;
+  mediaRankRoleId:  string | null;
 };
 
 // ── In-memory cache (5 min TTL) ───────────────────────────────────────────
@@ -47,6 +49,8 @@ async function loadCache(guildId: string): Promise<AutorankCache> {
         commandPermanent: row.commandPermanent,
         command1month:    row.command1month,
         commandMedia:     row.commandMedia ?? null,
+        rankRoleId:       row.rankRoleId ?? null,
+        mediaRankRoleId:  row.mediaRankRoleId ?? null,
       }
     : null;
 
@@ -90,7 +94,7 @@ export async function isMediaAutorankEnabled(guildId: string): Promise<boolean> 
 
 export async function saveAutorankSettings(
   guildId: string,
-  data: Omit<AutorankSettingsData, "commandMedia">,
+  data: Omit<AutorankSettingsData, "commandMedia" | "mediaRankRoleId">,
 ): Promise<void> {
   const existing = await db
     .select({ guildId: autorankSettingsTable.guildId })
@@ -103,7 +107,9 @@ export async function saveAutorankSettings(
       .set({ ...data, updatedAt: new Date() })
       .where(eq(autorankSettingsTable.guildId, guildId));
   } else {
-    await db.insert(autorankSettingsTable).values({ guildId, ...data, commandMedia: null });
+    await db.insert(autorankSettingsTable).values({
+      guildId, ...data, commandMedia: null, mediaRankRoleId: null,
+    });
   }
   invalidateAutorankCache(guildId);
 }
@@ -111,11 +117,12 @@ export async function saveAutorankSettings(
 // ── Media autorank save ───────────────────────────────────────────────────
 
 export async function saveMediaAutorankSettings(
-  guildId:      string,
-  rconHost:     string,
-  rconPort:     number,
-  rconPassword: string,
-  commandMedia: string,
+  guildId:        string,
+  rconHost:       string,
+  rconPort:       number,
+  rconPassword:   string,
+  commandMedia:   string,
+  mediaRankRoleId: string | null,
 ): Promise<void> {
   const existing = await db
     .select()
@@ -123,15 +130,15 @@ export async function saveMediaAutorankSettings(
     .where(eq(autorankSettingsTable.guildId, guildId));
 
   if (existing.length > 0) {
-    // Preserve existing rank commands; only update RCON + commandMedia
+    // Preserve existing rank commands; only update RCON + commandMedia + mediaRankRoleId
     await db
       .update(autorankSettingsTable)
-      .set({ rconHost, rconPort, rconPassword, commandMedia, updatedAt: new Date() })
+      .set({ rconHost, rconPort, rconPassword, commandMedia, mediaRankRoleId, updatedAt: new Date() })
       .where(eq(autorankSettingsTable.guildId, guildId));
   } else {
     await db.insert(autorankSettingsTable).values({
       guildId, rconHost, rconPort, rconPassword,
-      commandPermanent: "", command1month: "", commandMedia,
+      commandPermanent: "", command1month: "", commandMedia, mediaRankRoleId,
     });
   }
   invalidateAutorankCache(guildId);

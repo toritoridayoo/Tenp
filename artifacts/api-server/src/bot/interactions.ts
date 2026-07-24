@@ -896,8 +896,6 @@ async function handleRankApprove(
   catch { await interaction.editReply(`❌ ユーザー <@${targetUserId}> がサーバーに見つかりません。`); return; }
 
   try {
-    await targetMember.roles.add(botConfig.grantRoleId, "Booth購入承認");
-
     const permanent    = durationType === "permanent";
     const expiresAt    = permanent ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const product: ProductType = permanent ? "permanent" : "1month";
@@ -905,9 +903,13 @@ async function handleRankApprove(
     const mcid         = extractField(interaction, "Minecraft ID");
     const purchaseId   = extractField(interaction, "購入番号");
 
-    // 自動付与モードなら RCON でゲーム内ランクも付与
+    // 自動付与モードなら RCON でゲーム内ランクも付与（設定は autorank ON/OFF 関係なく取得）
     const autorankOn  = await isAutorankEnabled(guild.id);
-    const autorankCfg = autorankOn ? await getAutorankSettings(guild.id) : null;
+    const autorankCfg = await getAutorankSettings(guild.id);
+
+    // 付与するロール: autorank_settings で設定されていればそちらを優先、なければ env var
+    const roleId = autorankCfg?.rankRoleId || botConfig.grantRoleId;
+    await targetMember.roles.add(roleId, "Booth購入承認");
     let rconNote = "";
     if (autorankOn && autorankCfg && mcid) {
       try {
@@ -920,7 +922,7 @@ async function handleRankApprove(
     }
 
     await db.insert(roleGrantsTable).values({
-      guildId: guild.id, userId: targetUserId, roleId: botConfig.grantRoleId,
+      guildId: guild.id, userId: targetUserId, roleId,
       purchaseId: purchaseId ?? "unknown", permanent, expiresAt,
       grantedBy: interaction.user.id, ticketChannelId: interaction.channelId, removed: false,
     });
@@ -1128,11 +1130,13 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
     const mcid       = extractField(interaction, "Minecraft ID");
     const youtubeUrl = extractField(interaction, "YouTube URL");
 
-    await targetMember.roles.add(botConfig.mediaGrantRoleId, "メディアランク承認");
+    // 自動付与モードなら RCON でゲーム内ランクも付与（設定は autorank ON/OFF 関係なく取得）
+    const mediaAutorankOn = await isMediaAutorankEnabled(guild.id);
+    const autorankCfg     = await getAutorankSettings(guild.id);
 
-    // 自動付与モードなら RCON でゲーム内ランクも付与
-    const mediaAutorankOn  = await isMediaAutorankEnabled(guild.id);
-    const autorankCfg      = mediaAutorankOn ? await getAutorankSettings(guild.id) : null;
+    // 付与するロール: media_autorank_settings で設定されていればそちらを優先、なければ env var
+    const mediaRoleId = autorankCfg?.mediaRankRoleId || botConfig.mediaGrantRoleId;
+    await targetMember.roles.add(mediaRoleId, "メディアランク承認");
     let rconNote = "";
     if (mediaAutorankOn && autorankCfg?.commandMedia && mcid) {
       try {
@@ -1144,9 +1148,9 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
       }
     }
 
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
     await db.insert(roleGrantsTable).values({
-      guildId: guild.id, userId: targetUserId, roleId: botConfig.mediaGrantRoleId,
+      guildId: guild.id, userId: targetUserId, roleId: mediaRoleId,
       purchaseId: "media", permanent: false, expiresAt,
       grantedBy: interaction.user.id, ticketChannelId: interaction.channelId, removed: false,
     });
@@ -1779,18 +1783,16 @@ function buildAutorankSettingsModal(prefill?: AutorankSettingsData | null): Moda
   const modal = new ModalBuilder()
     .setCustomId("autorank_settings_modal")
     .setTitle("🔧 自動ランク付与設定（RCON）");
+  // ホスト:ポートを1フィールドに統合してロールID欄を確保（モーダル上限5フィールド）
+  const hostPort = prefill
+    ? `${prefill.rconHost}:${prefill.rconPort}`
+    : "";
   modal.addComponents(
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
-        .setCustomId("rcon_host").setLabel("RCONホスト（IPまたはドメイン）")
-        .setStyle(TextInputStyle.Short).setPlaceholder("例: mc.example.com")
-        .setValue(prefill?.rconHost ?? "").setRequired(true)
-    ),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder()
-        .setCustomId("rcon_port").setLabel("RCONポート番号")
-        .setStyle(TextInputStyle.Short).setPlaceholder("例: 25575")
-        .setValue(prefill?.rconPort?.toString() ?? "25575").setRequired(true)
+        .setCustomId("rcon_host_port").setLabel("RCONアドレス（ホスト:ポート）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: mc.example.com:25575")
+        .setValue(hostPort).setRequired(true)
     ),
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
@@ -1812,6 +1814,13 @@ function buildAutorankSettingsModal(prefill?: AutorankSettingsData | null): Moda
         .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus-month")
         .setValue(prefill?.command1month ?? "").setRequired(true)
     ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("rank_role_id")
+        .setLabel("付与するDiscordロールID（任意）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: 123456789012345678（空欄=env変数のロールを使用）")
+        .setValue(prefill?.rankRoleId ?? "").setRequired(false)
+    ),
   );
   return modal;
 }
@@ -1829,15 +1838,20 @@ async function handleAutorankSettingsCommand(interaction: ChatInputCommandIntera
 async function handleAutorankSettingsModalSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: 64 });
 
-  const host    = interaction.fields.getTextInputValue("rcon_host").trim();
-  const portStr = interaction.fields.getTextInputValue("rcon_port").trim();
-  const pass    = interaction.fields.getTextInputValue("rcon_password").trim();
-  const cmdPerm = interaction.fields.getTextInputValue("cmd_permanent").trim();
-  const cmd1m   = interaction.fields.getTextInputValue("cmd_1month").trim();
+  const hostPort  = interaction.fields.getTextInputValue("rcon_host_port").trim();
+  const pass      = interaction.fields.getTextInputValue("rcon_password").trim();
+  const cmdPerm   = interaction.fields.getTextInputValue("cmd_permanent").trim();
+  const cmd1m     = interaction.fields.getTextInputValue("cmd_1month").trim();
+  const roleIdRaw = interaction.fields.getTextInputValue("rank_role_id").trim();
+  const rankRoleId = roleIdRaw || null;
 
+  // Parse "host:port"
+  const lastColon = hostPort.lastIndexOf(":");
+  const host = lastColon !== -1 ? hostPort.slice(0, lastColon) : hostPort;
+  const portStr = lastColon !== -1 ? hostPort.slice(lastColon + 1) : "";
   const port = parseInt(portStr, 10);
-  if (isNaN(port) || port < 1 || port > 65535) {
-    await interaction.editReply("❌ ポート番号が無効です（1〜65535 の整数を入力してください）。");
+  if (!host || isNaN(port) || port < 1 || port > 65535) {
+    await interaction.editReply("❌ RCONアドレスの形式が無効です（例: `mc.example.com:25575`）。");
     return;
   }
 
@@ -1845,6 +1859,7 @@ async function handleAutorankSettingsModalSubmit(interaction: ModalSubmitInterac
     await saveAutorankSettings(interaction.guildId!, {
       rconHost: host, rconPort: port, rconPassword: pass,
       commandPermanent: cmdPerm, command1month: cmd1m,
+      rankRoleId,
     });
 
     await interaction.editReply({
@@ -1853,11 +1868,12 @@ async function handleAutorankSettingsModalSubmit(interaction: ModalSubmitInterac
           .setColor(Colors.Green)
           .setTitle("✅ 自動ランク付与設定を保存しました")
           .addFields(
-            { name: "🌐 RCONホスト",   value: host,                         inline: true },
-            { name: "🔌 RCONポート",   value: port.toString(),               inline: true },
-            { name: "🔑 RCONパスワード", value: "••••••••（保存済み）",         inline: true },
-            { name: "♾️ 永久版コマンド", value: `\`${cmdPerm}\``,             inline: false },
-            { name: "⏰ 1ヶ月版コマンド", value: `\`${cmd1m}\``,              inline: false },
+            { name: "🌐 RCONホスト",      value: host,                  inline: true },
+            { name: "🔌 RCONポート",      value: port.toString(),        inline: true },
+            { name: "🔑 RCONパスワード",  value: "••••••••（保存済み）",  inline: true },
+            { name: "♾️ 永久版コマンド",  value: `\`${cmdPerm}\``,       inline: false },
+            { name: "⏰ 1ヶ月版コマンド", value: `\`${cmd1m}\``,         inline: false },
+            { name: "🎭 付与ロールID",    value: rankRoleId ? `<@&${rankRoleId}>（\`${rankRoleId}\`）` : "未設定（env変数のロールを使用）", inline: false },
           )
           .setDescription("有効にするには `/autorank_status status:true` を実行してください。")
           .setTimestamp()
@@ -1949,18 +1965,13 @@ function buildMediaAutorankSettingsModal(prefill?: AutorankSettingsData | null):
   const modal = new ModalBuilder()
     .setCustomId("media_autorank_settings_modal")
     .setTitle("🔧 メディアランク自動付与設定（RCON）");
+  const hostPort = prefill ? `${prefill.rconHost}:${prefill.rconPort}` : "";
   modal.addComponents(
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
-        .setCustomId("rcon_host").setLabel("RCONホスト（IPまたはドメイン）")
-        .setStyle(TextInputStyle.Short).setPlaceholder("例: mc.example.com")
-        .setValue(prefill?.rconHost ?? "").setRequired(true)
-    ),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder()
-        .setCustomId("rcon_port").setLabel("RCONポート番号")
-        .setStyle(TextInputStyle.Short).setPlaceholder("例: 25575")
-        .setValue(prefill?.rconPort?.toString() ?? "25575").setRequired(true)
+        .setCustomId("rcon_host_port").setLabel("RCONアドレス（ホスト:ポート）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: mc.example.com:25575")
+        .setValue(hostPort).setRequired(true)
     ),
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
@@ -1974,6 +1985,13 @@ function buildMediaAutorankSettingsModal(prefill?: AutorankSettingsData | null):
         .setLabel("メディアランクコマンド（{mcid} がIDに置換されます）")
         .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus-media")
         .setValue(prefill?.commandMedia ?? "").setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("media_rank_role_id")
+        .setLabel("付与するDiscordロールID（任意）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: 123456789012345678（空欄=env変数のロールを使用）")
+        .setValue(prefill?.mediaRankRoleId ?? "").setRequired(false)
     ),
   );
   return modal;
@@ -1992,19 +2010,23 @@ async function handleMediaAutorankSettingsCommand(interaction: ChatInputCommandI
 async function handleMediaAutorankSettingsModalSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: 64 });
 
-  const host    = interaction.fields.getTextInputValue("rcon_host").trim();
-  const portStr = interaction.fields.getTextInputValue("rcon_port").trim();
-  const pass    = interaction.fields.getTextInputValue("rcon_password").trim();
-  const cmdMedia = interaction.fields.getTextInputValue("cmd_media").trim();
+  const hostPort      = interaction.fields.getTextInputValue("rcon_host_port").trim();
+  const pass          = interaction.fields.getTextInputValue("rcon_password").trim();
+  const cmdMedia      = interaction.fields.getTextInputValue("cmd_media").trim();
+  const roleIdRaw     = interaction.fields.getTextInputValue("media_rank_role_id").trim();
+  const mediaRankRoleId = roleIdRaw || null;
 
+  const lastColon = hostPort.lastIndexOf(":");
+  const host = lastColon !== -1 ? hostPort.slice(0, lastColon) : hostPort;
+  const portStr = lastColon !== -1 ? hostPort.slice(lastColon + 1) : "";
   const port = parseInt(portStr, 10);
-  if (isNaN(port) || port < 1 || port > 65535) {
-    await interaction.editReply("❌ ポート番号が無効です（1〜65535 の整数を入力してください）。");
+  if (!host || isNaN(port) || port < 1 || port > 65535) {
+    await interaction.editReply("❌ RCONアドレスの形式が無効です（例: `mc.example.com:25575`）。");
     return;
   }
 
   try {
-    await saveMediaAutorankSettings(interaction.guildId!, host, port, pass, cmdMedia);
+    await saveMediaAutorankSettings(interaction.guildId!, host, port, pass, cmdMedia, mediaRankRoleId);
 
     await interaction.editReply({
       embeds: [
@@ -2012,10 +2034,11 @@ async function handleMediaAutorankSettingsModalSubmit(interaction: ModalSubmitIn
           .setColor(Colors.Green)
           .setTitle("✅ メディアランク自動付与設定を保存しました")
           .addFields(
-            { name: "🌐 RCONホスト",       value: host,                  inline: true },
-            { name: "🔌 RCONポート",        value: port.toString(),        inline: true },
-            { name: "🔑 RCONパスワード",    value: "••••••••（保存済み）",  inline: true },
-            { name: "📺 メディアコマンド",   value: `\`${cmdMedia}\``,      inline: false },
+            { name: "🌐 RCONホスト",      value: host,                  inline: true },
+            { name: "🔌 RCONポート",      value: port.toString(),        inline: true },
+            { name: "🔑 RCONパスワード",  value: "••••••••（保存済み）",  inline: true },
+            { name: "📺 メディアコマンド", value: `\`${cmdMedia}\``,      inline: false },
+            { name: "🎭 付与ロールID",    value: mediaRankRoleId ? `<@&${mediaRankRoleId}>（\`${mediaRankRoleId}\`）` : "未設定（env変数のロールを使用）", inline: false },
           )
           .setDescription("有効にするには `/media_autorank_status status:true` を実行してください。")
           .setTimestamp()
