@@ -24,7 +24,7 @@ import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panelCommand.js";
 import { handlePanelSettingsSet, handlePanelSettingsView } from "./panelSettingsCommand.js";
-import { setStaffAppOpen } from "./staffAppStatus.js";
+import { setStaffAppOpen, isRequestCloseEnabled, setRequestCloseEnabled } from "./staffAppStatus.js";
 import { isStaffInGuild, getGuildSettings, getPurchaseCtx, getSupportCtx } from "./guildConfig.js";
 import {
   handleStaffApplyButton,
@@ -72,6 +72,9 @@ export async function handleInteraction(interaction: Interaction) {
     if (interaction.commandName === "staff_application") {
       await handleStaffApplicationCommand(interaction);
     }
+    if (interaction.commandName === "requestclose") {
+      await handleRequestCloseCommand(interaction);
+    }
     return;
   }
   if (interaction.isButton()) {
@@ -116,6 +119,58 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   if (customId === "open_report_ticket")  { await interaction.showModal(buildReportModal());  return; }
   if (customId === "open_appeal_ticket")  { await interaction.showModal(buildAppealModal());  return; }
   if (customId === "open_inquiry_ticket") { await interaction.showModal(buildInquiryModal()); return; }
+
+  // User close request button (ticket opener only)
+  const reqCloseMatch = customId.match(/^req_close_(bug|report|appeal|inquiry)_(\d+)$/);
+  if (reqCloseMatch) {
+    const type = reqCloseMatch[1] as "bug" | "report" | "appeal" | "inquiry";
+    const ownerId = reqCloseMatch[2]!;
+    if (interaction.user.id !== ownerId) {
+      await interaction.reply({ content: "❌ このボタンはチケットの申請者のみ押せます。", flags: 64 });
+      return;
+    }
+    const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`req_close_confirm_${type}_${ownerId}`)
+        .setLabel("✅ はい、閉じる")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId("req_close_cancel")
+        .setLabel("❌ キャンセル")
+        .setStyle(ButtonStyle.Secondary),
+    );
+    await interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.Orange)
+          .setTitle("🔔 クローズリクエスト")
+          .setDescription("本当にこのチケットをクローズしますか？"),
+      ],
+      components: [confirmRow],
+      flags: 64,
+    });
+    return;
+  }
+
+  // User close confirm
+  const reqCloseConfirmMatch = customId.match(/^req_close_confirm_(bug|report|appeal|inquiry)_(\d+)$/);
+  if (reqCloseConfirmMatch) {
+    const ownerId = reqCloseConfirmMatch[2]!;
+    if (interaction.user.id !== ownerId) {
+      await interaction.reply({ content: "❌ このボタンはチケットの申請者のみ押せます。", flags: 64 });
+      return;
+    }
+    await interaction.update({ content: "✅ クローズリクエストを受け付けました。", embeds: [], components: [] });
+    const ch = interaction.channel as TextChannel | null;
+    await closeTicketChannel(ch, ownerId, "ユーザーによるクローズリクエスト");
+    return;
+  }
+
+  // User close cancel
+  if (customId === "req_close_cancel") {
+    await interaction.update({ content: "❌ キャンセルしました。", embeds: [], components: [] });
+    return;
+  }
 
   // Support ticket close buttons: show reason modal first
   const closeTicketMatch = customId.match(/^close_ticket_(bug|report|appeal|inquiry)_(\d+)$/);
@@ -663,7 +718,8 @@ async function handleBugModalSubmit(interaction: ModalSubmitInteraction) {
   if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
   try {
     const _s = await getGuildSettings(interaction.guild.id);
-    const channelId = await createBugTicketChannel(interaction.guild, interaction.user, mcid, bugContent, getSupportCtx(_s));
+    const _rcEnabled = await isRequestCloseEnabled(interaction.guild.id);
+    const channelId = await createBugTicketChannel(interaction.guild, interaction.user, mcid, bugContent, getSupportCtx(_s), _rcEnabled);
     await interaction.editReply(`✅ バグ報告チケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
   } catch (err) {
     logger.error({ err }, "Failed to create bug ticket channel");
@@ -681,7 +737,8 @@ async function handleReportModalSubmit(interaction: ModalSubmitInteraction) {
   if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
   try {
     const _s = await getGuildSettings(interaction.guild.id);
-    const channelId = await createReportTicketChannel(interaction.guild, interaction.user, ownMcid, reportedMcid, violationContent, getSupportCtx(_s));
+    const _rcEnabled = await isRequestCloseEnabled(interaction.guild.id);
+    const channelId = await createReportTicketChannel(interaction.guild, interaction.user, ownMcid, reportedMcid, violationContent, getSupportCtx(_s), _rcEnabled);
     await interaction.editReply(`✅ プレイヤー通報チケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
   } catch (err) {
     logger.error({ err }, "Failed to create report ticket channel");
@@ -698,7 +755,8 @@ async function handleAppealModalSubmit(interaction: ModalSubmitInteraction) {
   if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
   try {
     const _s = await getGuildSettings(interaction.guild.id);
-    const channelId = await createAppealTicketChannel(interaction.guild, interaction.user, mcid, details, getSupportCtx(_s));
+    const _rcEnabled = await isRequestCloseEnabled(interaction.guild.id);
+    const channelId = await createAppealTicketChannel(interaction.guild, interaction.user, mcid, details, getSupportCtx(_s), _rcEnabled);
     await interaction.editReply(`✅ 異議申し立てチケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
   } catch (err) {
     logger.error({ err }, "Failed to create appeal ticket channel");
@@ -714,7 +772,8 @@ async function handleInquiryModalSubmit(interaction: ModalSubmitInteraction) {
   if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
   try {
     const _s = await getGuildSettings(interaction.guild.id);
-    const channelId = await createInquiryTicketChannel(interaction.guild, interaction.user, content, getSupportCtx(_s));
+    const _rcEnabled = await isRequestCloseEnabled(interaction.guild.id);
+    const channelId = await createInquiryTicketChannel(interaction.guild, interaction.user, content, getSupportCtx(_s), _rcEnabled);
     await interaction.editReply(`✅ お問い合わせチケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
   } catch (err) {
     logger.error({ err }, "Failed to create inquiry ticket channel");
@@ -1134,9 +1193,14 @@ async function sendApprovalNotification(
 ) {
   try {
     const _s = await getGuildSettings(guild.id);
-    const approvalChId = getPurchaseCtx(_s).approvalChannelId || botConfig.approvalChannelId;
+    const _pCtx = getPurchaseCtx(_s);
+    const approvalChId = _pCtx.approvalChannelId || botConfig.approvalChannelId;
     const ch = await guild.channels.fetch(approvalChId);
     if (!ch || !(ch instanceof TextChannel)) return;
+
+    const pingContent = _pCtx.approvalPingIds.length
+      ? _pCtx.approvalPingIds.map((e) => (e.type === "role" ? `<@&${e.id}>` : `<@${e.id}>`)).join(" ")
+      : undefined;
 
     const embed = new EmbedBuilder().setColor(color)
       .setTitle("🎮 ロール付与 — ゲーム内反映確認")
@@ -1154,7 +1218,7 @@ async function sendApprovalNotification(
       new ButtonBuilder().setCustomId(`grant_complete_${targetUserId}`).setLabel("✅ ゲーム内付与完了").setStyle(ButtonStyle.Success)
     );
 
-    await ch.send({ embeds: [embed], components: [row] });
+    await ch.send({ content: pingContent, embeds: [embed], components: [row] });
   } catch (err) {
     logger.error({ err }, "Failed to send approval notification");
   }
@@ -1167,9 +1231,14 @@ async function sendKeyApprovalNotification(
 ) {
   try {
     const _s = await getGuildSettings(guild.id);
-    const approvalChId = getPurchaseCtx(_s).approvalChannelId || botConfig.approvalChannelId;
+    const _pCtx2 = getPurchaseCtx(_s);
+    const approvalChId = _pCtx2.approvalChannelId || botConfig.approvalChannelId;
     const ch = await guild.channels.fetch(approvalChId);
     if (!ch || !(ch instanceof TextChannel)) return;
+
+    const pingContent2 = _pCtx2.approvalPingIds.length
+      ? _pCtx2.approvalPingIds.map((e) => (e.type === "role" ? `<@&${e.id}>` : `<@${e.id}>`)).join(" ")
+      : undefined;
 
     const embed = new EmbedBuilder().setColor(color)
       .setTitle("🔑 鍵・シャード付与 — ゲーム内反映確認")
@@ -1186,7 +1255,7 @@ async function sendKeyApprovalNotification(
       new ButtonBuilder().setCustomId(`key_assign_${targetUserId}`).setLabel("🔑 付与する").setStyle(ButtonStyle.Primary)
     );
 
-    await ch.send({ embeds: [embed], components: [row] });
+    await ch.send({ content: pingContent2, embeds: [embed], components: [row] });
   } catch (err) {
     logger.error({ err }, "Failed to send key approval notification");
   }
@@ -1418,6 +1487,27 @@ async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: str
     });
   } catch (err) {
     logger.error({ err }, "Failed to send reject log");
+  }
+}
+
+async function handleRequestCloseCommand(interaction: ChatInputCommandInteraction) {
+  const member = interaction.member as GuildMember | null;
+  if (!member?.permissions.has("Administrator")) {
+    await interaction.reply({ content: "❌ このコマンドはサーバー管理者のみ使用できます。", flags: 64 });
+    return;
+  }
+  const status = interaction.options.getBoolean("status", true);
+  await interaction.deferReply({ flags: 64 });
+  try {
+    await setRequestCloseEnabled(interaction.guildId!, status);
+    await interaction.editReply(
+      status
+        ? "✅ サポートチケットに「🔔 クローズをリクエスト」ボタンを **表示** に設定しました。"
+        : "🔒 サポートチケットの「🔔 クローズをリクエスト」ボタンを **非表示** に設定しました。",
+    );
+  } catch (err) {
+    logger.error({ err }, "Failed to set request close status");
+    await interaction.editReply("❌ 設定の変更に失敗しました。");
   }
 }
 

@@ -10,6 +10,7 @@ export type PanelCtx = {
   staffIds: StaffEntry[];
   logChannelId: string;
   approvalChannelId: string;
+  approvalPingIds: StaffEntry[];
 };
 
 export type GuildSettings = Partial<Record<"purchase" | "support" | "staff", PanelCtx>>;
@@ -34,6 +35,7 @@ export async function getGuildSettings(guildId: string): Promise<GuildSettings> 
     const key = row.panelType as "purchase" | "support" | "staff";
     settings[key] = {
       staffIds: (row.staffIds ?? []) as StaffEntry[],
+      approvalPingIds: (row.approvalPingIds ?? []) as StaffEntry[],
       categoryId: row.ticketCategoryId ?? "",
       logChannelId: row.logChannelId ?? "",
       approvalChannelId: row.approvalChannelId ?? "",
@@ -77,25 +79,21 @@ export async function isStaffInGuild(
 export function getPurchaseCtx(s: GuildSettings): PanelCtx {
   return {
     categoryId: s.purchase?.categoryId || botConfig.ticketChannelId,
-    staffIds: s.purchase?.staffIds?.length
-      ? s.purchase.staffIds
-      : buildEnvStaffIds(),
+    staffIds: s.purchase?.staffIds?.length ? s.purchase.staffIds : buildEnvStaffIds(),
     logChannelId: s.purchase?.logChannelId || botConfig.ticketLogChannelId,
     approvalChannelId: s.purchase?.approvalChannelId || botConfig.approvalChannelId,
+    approvalPingIds: s.purchase?.approvalPingIds ?? [],
   };
 }
 
 export function getSupportCtx(s: GuildSettings): PanelCtx {
   return {
     categoryId: s.support?.categoryId || botConfig.supportTicketCategoryId,
-    staffIds: s.support?.staffIds?.length
-      ? s.support.staffIds
-      : buildEnvStaffIds(),
+    staffIds: s.support?.staffIds?.length ? s.support.staffIds : buildEnvStaffIds(),
     logChannelId:
-      s.support?.logChannelId ||
-      botConfig.supportLogChannelId ||
-      botConfig.ticketLogChannelId,
+      s.support?.logChannelId || botConfig.supportLogChannelId || botConfig.ticketLogChannelId,
     approvalChannelId: "",
+    approvalPingIds: [],
   };
 }
 

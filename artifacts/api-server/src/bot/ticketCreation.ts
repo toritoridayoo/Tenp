@@ -32,6 +32,30 @@ export const KEY_QUANTITIES: Record<string, number[]> = {
   Shards:       [300, 500, 1500, 3000, 4000, 10000],
 };
 
+// ── Support close row builder ─────────────────────────────────────────────
+
+export function buildSupportCloseRow(
+  type: "bug" | "report" | "appeal" | "inquiry",
+  userId: string,
+  showRequestClose?: boolean,
+): ActionRowBuilder<ButtonBuilder> {
+  const buttons: ButtonBuilder[] = [
+    new ButtonBuilder()
+      .setCustomId(`close_ticket_${type}_${userId}`)
+      .setLabel("✅ 対応済み（クローズ）")
+      .setStyle(ButtonStyle.Success),
+  ];
+  if (showRequestClose) {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`req_close_${type}_${userId}`)
+        .setLabel("🔔 クローズをリクエスト")
+        .setStyle(ButtonStyle.Secondary),
+    );
+  }
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
+}
+
 // ── Permission helpers ────────────────────────────────────────────────────
 
 const ALLOW_ALL = [
@@ -294,6 +318,7 @@ export async function createBugTicketChannel(
   mcid: string,
   bugContent: string,
   ctx?: PanelCtx,
+  showRequestClose?: boolean,
 ): Promise<string> {
   const categoryId = ctx?.categoryId || botConfig.supportTicketCategoryId || botConfig.ticketChannelId;
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
@@ -304,12 +329,7 @@ export async function createBugTicketChannel(
     permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`close_ticket_bug_${user.id}`)
-      .setLabel("✅ 対応済み（クローズ）")
-      .setStyle(ButtonStyle.Success)
-  );
+  const row = buildSupportCloseRow("bug", user.id, showRequestClose);
 
   const embed = new EmbedBuilder()
     .setColor(Colors.Orange)
@@ -349,6 +369,7 @@ export async function createReportTicketChannel(
   reportedMcid: string,
   violationContent: string,
   ctx?: PanelCtx,
+  showRequestClose?: boolean,
 ): Promise<string> {
   const categoryId = ctx?.categoryId || botConfig.supportTicketCategoryId || botConfig.ticketChannelId;
   const safeMcid = ownMcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
@@ -359,12 +380,7 @@ export async function createReportTicketChannel(
     permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`close_ticket_report_${user.id}`)
-      .setLabel("✅ 対応済み（クローズ）")
-      .setStyle(ButtonStyle.Success)
-  );
+  const row = buildSupportCloseRow("report", user.id, showRequestClose);
 
   const embed = new EmbedBuilder()
     .setColor(Colors.Red)
@@ -405,6 +421,7 @@ export async function createAppealTicketChannel(
   mcid: string,
   details: string,
   ctx?: PanelCtx,
+  showRequestClose?: boolean,
 ): Promise<string> {
   const categoryId = ctx?.categoryId || botConfig.supportTicketCategoryId || botConfig.ticketChannelId;
   const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "");
@@ -415,12 +432,7 @@ export async function createAppealTicketChannel(
     permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`close_ticket_appeal_${user.id}`)
-      .setLabel("✅ 対応済み（クローズ）")
-      .setStyle(ButtonStyle.Success)
-  );
+  const row = buildSupportCloseRow("appeal", user.id, showRequestClose);
 
   const embed = new EmbedBuilder()
     .setColor(Colors.Purple)
@@ -458,6 +470,7 @@ export async function createInquiryTicketChannel(
   user: User,
   content: string,
   ctx?: PanelCtx,
+  showRequestClose?: boolean,
 ): Promise<string> {
   const categoryId = ctx?.categoryId || botConfig.supportTicketCategoryId || botConfig.ticketChannelId;
   const safeUsername = user.username.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 16) || "user";
@@ -468,12 +481,7 @@ export async function createInquiryTicketChannel(
     permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id, ctx?.staffIds),
   });
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`close_ticket_inquiry_${user.id}`)
-      .setLabel("✅ 対応済み（クローズ）")
-      .setStyle(ButtonStyle.Success)
-  );
+  const row = buildSupportCloseRow("inquiry", user.id, showRequestClose);
 
   const embed = new EmbedBuilder()
     .setColor(Colors.Yellow)

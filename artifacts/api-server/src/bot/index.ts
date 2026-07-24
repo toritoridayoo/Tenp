@@ -36,6 +36,15 @@ const commands = [
     .addUserOption((o) => o.setName("user").setDescription("追加するユーザー").setRequired(true))
     .toJSON(),
   new SlashCommandBuilder()
+    .setName("requestclose")
+    .setDescription("サポートチケットに「クローズをリクエスト」ボタンを表示するか切り替えます（管理者専用）")
+    .addBooleanOption((o) =>
+      o.setName("status")
+        .setDescription("true = 表示する、false = 非表示にする")
+        .setRequired(true)
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName("staff_application")
     .setDescription("スタッフ応募の受付状態を切り替えます（管理者専用）")
     .addBooleanOption((o) =>
@@ -73,6 +82,9 @@ const commands = [
         .addChannelOption((o) =>
           o.setName("approval_channel").setDescription("承認通知チャンネル（購入チケット用・任意）").addChannelTypes(ChannelType.GuildText).setRequired(false)
         )
+        .addMentionableOption((o) => o.setName("approval_ping1").setDescription("承認通知でメンションするロール/メンバー1（購入チケット用・任意）").setRequired(false))
+        .addMentionableOption((o) => o.setName("approval_ping2").setDescription("承認通知でメンションするロール/メンバー2（任意）").setRequired(false))
+        .addMentionableOption((o) => o.setName("approval_ping3").setDescription("承認通知でメンションするロール/メンバー3（任意）").setRequired(false))
     )
     .addSubcommand((sub) =>
       sub.setName("view").setDescription("現在のパネル設定を表示します")

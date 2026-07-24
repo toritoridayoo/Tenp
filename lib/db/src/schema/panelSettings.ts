@@ -9,6 +9,7 @@ export const panelSettingsTable = pgTable(
     guildId: text("guild_id").notNull(),
     panelType: text("panel_type").notNull(), // 'purchase' | 'support' | 'staff'
     staffIds: jsonb("staff_ids").$type<StaffEntry[]>().notNull().default([]),
+    approvalPingIds: jsonb("approval_ping_ids").$type<StaffEntry[]>().notNull().default([]),
     ticketCategoryId: text("ticket_category_id"),
     logChannelId: text("log_channel_id"),
     approvalChannelId: text("approval_channel_id"),

@@ -46,9 +46,9 @@ export async function handlePanelSettingsSet(
   for (let i = 1; i <= 5; i++) {
     const m = interaction.options.getMentionable(`staff${i}`);
     if (!m) continue;
-    if (m instanceof Role)        staffEntries.push({ id: m.id, type: "role" });
+    if (m instanceof Role)             staffEntries.push({ id: m.id, type: "role" });
     else if (m instanceof GuildMember) staffEntries.push({ id: m.id, type: "user" });
-    else if (m instanceof User)   staffEntries.push({ id: m.id, type: "user" });
+    else if (m instanceof User)        staffEntries.push({ id: m.id, type: "user" });
   }
 
   if (staffEntries.length === 0) {
@@ -57,6 +57,18 @@ export async function handlePanelSettingsSet(
       flags: 64,
     });
     return;
+  }
+
+  // Collect approval ping entries (approval_ping1–3, purchase panel only)
+  const pingEntries: StaffEntry[] = [];
+  if (panelType === "purchase") {
+    for (let i = 1; i <= 3; i++) {
+      const m = interaction.options.getMentionable(`approval_ping${i}`);
+      if (!m) continue;
+      if (m instanceof Role)             pingEntries.push({ id: m.id, type: "role" });
+      else if (m instanceof GuildMember) pingEntries.push({ id: m.id, type: "user" });
+      else if (m instanceof User)        pingEntries.push({ id: m.id, type: "user" });
+    }
   }
 
   const guildId = interaction.guildId!;
@@ -77,6 +89,7 @@ export async function handlePanelSettingsSet(
       guildId,
       panelType,
       staffIds: staffEntries,
+      approvalPingIds: pingEntries,
       ticketCategoryId: ticketCategory?.id ?? null,
       logChannelId:     logChannel?.id ?? null,
       approvalChannelId: approvalCh?.id ?? null,
@@ -103,12 +116,14 @@ export async function handlePanelSettingsSet(
       .map((e) => (e.type === "role" ? `<@&${e.id}>` : `<@${e.id}>`))
       .join(" ");
 
+    const pingMentions = pingEntries.map((e) => (e.type === "role" ? `<@&${e.id}>` : `<@${e.id}>`)).join(" ");
     const lines = [
       `✅ **${PANEL_LABELS[panelType]}** の設定を保存しました！`,
       `👥 スタッフ: ${staffMentions}`,
       ticketCategory ? `📂 チケットカテゴリ: <#${ticketCategory.id}>` : null,
       logChannel     ? `📋 ログチャンネル: <#${logChannel.id}>`        : null,
       approvalCh     ? `✅ 承認チャンネル: <#${approvalCh.id}>`        : null,
+      pingEntries.length ? `🔔 承認ピン: ${pingMentions}`              : null,
     ]
       .filter(Boolean)
       .join("\n");
@@ -164,11 +179,15 @@ export async function handlePanelSettingsView(
       ? cfg.staffIds.map((e) => (e.type === "role" ? `<@&${e.id}>` : `<@${e.id}>`)).join(" ")
       : "*(なし)*";
 
+    const pingMentions2 = cfg.approvalPingIds?.length
+      ? cfg.approvalPingIds.map((e) => (e.type === "role" ? `<@&${e.id}>` : `<@${e.id}>`)).join(" ")
+      : null;
     const lines = [
       `👥 スタッフ: ${staffMentions}`,
       cfg.categoryId ? `📂 カテゴリ: <#${cfg.categoryId}>` : "📂 カテゴリ: *(未設定)*",
       cfg.logChannelId ? `📋 ログ: <#${cfg.logChannelId}>` : null,
       cfg.approvalChannelId ? `✅ 承認ch: <#${cfg.approvalChannelId}>` : null,
+      pingMentions2 ? `🔔 承認ピン: ${pingMentions2}` : null,
     ]
       .filter(Boolean)
       .join("\n");
