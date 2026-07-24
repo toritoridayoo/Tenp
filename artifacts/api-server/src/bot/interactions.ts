@@ -1544,6 +1544,24 @@ async function handleCloseCommand(interaction: ChatInputCommandInteraction) {
     await interaction.reply({ content: "❌ テキストチャンネルで使用してください。", flags: 64 });
     return;
   }
+
+  // チケットカテゴリ内かチェック
+  const guildId = interaction.guildId ?? "";
+  const settings = await getGuildSettings(guildId);
+  const allowedCategories = new Set<string>(
+    [
+      settings.purchase?.categoryId,
+      settings.support?.categoryId,
+      settings.staff?.categoryId,
+      botConfig.ticketChannelId,
+      botConfig.supportTicketCategoryId,
+    ].filter(Boolean) as string[],
+  );
+  if (allowedCategories.size > 0 && (!ch.parentId || !allowedCategories.has(ch.parentId))) {
+    await interaction.reply({ content: "❌ このコマンドはチケットカテゴリ内のチャンネルでのみ使用できます。", flags: 64 });
+    return;
+  }
+
   const reason = interaction.options.getString("reason") ?? "スタッフによるクローズ";
   await interaction.reply({ content: `🔒 **${reason}** によりこのチケットをクローズします。`, flags: 64 });
 
