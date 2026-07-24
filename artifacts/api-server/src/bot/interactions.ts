@@ -12,6 +12,7 @@ import {
   Interaction,
   ModalBuilder,
   ModalSubmitInteraction,
+  PermissionFlagsBits,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
   TextChannel,
@@ -25,6 +26,11 @@ import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panelCommand.js";
 import { handlePanelSettingsSet, handlePanelSettingsView } from "./panelSettingsCommand.js";
 import { setStaffAppOpen, isRequestCloseEnabled, setRequestCloseEnabled } from "./staffAppStatus.js";
+import {
+  getAutorankSettings, isAutorankEnabled, saveAutorankSettings,
+  setAutorankEnabled, grantMinecraftRank,
+  type AutorankSettingsData,
+} from "./autorankSettings.js";
 import { isStaffInGuild, getGuildSettings, getPurchaseCtx, getSupportCtx } from "./guildConfig.js";
 import {
   handleStaffApplyButton,
@@ -75,6 +81,9 @@ export async function handleInteraction(interaction: Interaction) {
     if (interaction.commandName === "requestclose") {
       await handleRequestCloseCommand(interaction);
     }
+    if (interaction.commandName === "autorank_settings")      await handleAutorankSettingsCommand(interaction);
+    if (interaction.commandName === "autorank_status")        await handleAutorankStatusCommand(interaction);
+    if (interaction.commandName === "autorank_settings_view") await handleAutorankSettingsViewCommand(interaction);
     return;
   }
   if (interaction.isButton()) {
@@ -467,6 +476,8 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   if (interaction.customId === "appeal_modal")  { await handleAppealModalSubmit(interaction);  return; }
   if (interaction.customId === "inquiry_modal") { await handleInquiryModalSubmit(interaction); return; }
 
+  if (interaction.customId === "autorank_settings_modal") { await handleAutorankSettingsModalSubmit(interaction); return; }
+
   // Reject reason modals: reject_reason_{type}_{userId}_{messageId}
   const rejectModal = interaction.customId.match(/^reject_reason_(rank|key|media)_(\d+)_(\d+)$/);
   if (rejectModal) { await handleRejectReasonSubmit(interaction, rejectModal[1] as "rank" | "key" | "media", rejectModal[2]!, rejectModal[3]!); return; }
@@ -523,6 +534,75 @@ async function handleProductSelection(interaction: ButtonInteraction) {
     return;
   }
 
+  // ── 自動付与モードのチェック ──────────────────────────────────────
+  if (await isAutorankEnabled(interaction.guild.id)) {
+    const autorankCfg = await getAutorankSettings(interaction.guild.id);
+    if (!autorankCfg) {
+      await interaction.editReply("❌ 自動ランク付与が有効ですが、RCON設定が未完了です。`/autorank_settings` で設定してください。");
+      return;
+    }
+
+    const permanent    = product === "permanent";
+    const expiresAt    = permanent ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const productLabel = PRODUCT_LABELS[product];
+
+    try {
+      // Discord ロール付与
+      const targetMember = await interaction.guild.members.fetch(interaction.user.id);
+      if (botConfig.grantRoleId) {
+        await targetMember.roles.add(botConfig.grantRoleId, "Booth購入（自動付与）");
+      }
+
+      // Minecraft RCON コマンド実行
+      let rconResponse = "";
+      try {
+        rconResponse = await grantMinecraftRank(pending.mcid, product, autorankCfg);
+      } catch (rconErr) {
+        logger.error({ rconErr }, "RCON command failed during autorank");
+        rconResponse = "⚠️ RCON接続エラー（Discordロールは付与済み、ゲーム内付与は手動確認が必要です）";
+      }
+
+      // DB 記録
+      await db.insert(roleGrantsTable).values({
+        guildId:         interaction.guild.id,
+        userId:          interaction.user.id,
+        roleId:          botConfig.grantRoleId || "autorank",
+        purchaseId:      pending.purchaseId,
+        permanent,
+        expiresAt,
+        grantedBy:       "autorank",
+        removed:         false,
+      });
+
+      clearRankPending(interaction.user.id);
+
+      await interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(Colors.Green)
+            .setTitle("✅ ランクが自動付与されました！")
+            .addFields(
+              { name: "🎮 Minecraft ID",  value: `\`${pending.mcid}\``,      inline: true },
+              { name: "🧾 購入番号",       value: `\`${pending.purchaseId}\``, inline: true },
+              { name: "📦 商品",           value: productLabel,                inline: true },
+              { name: "付与期間",          value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true },
+            )
+            .setDescription("Discordロールとゲーム内ランクが付与されました！")
+            .setFooter({ text: rconResponse || "RCON: 完了" })
+            .setTimestamp()
+        ],
+        components: [],
+      });
+
+      logger.info({ userId: interaction.user.id, mcid: pending.mcid, product }, "Autorank granted");
+    } catch (err) {
+      logger.error({ err }, "Autorank grant failed");
+      await interaction.editReply("❌ 自動付与中にエラーが発生しました。スタッフにお問い合わせください。");
+    }
+    return;
+  }
+
+  // ── 通常チケット作成フロー ────────────────────────────────────────
   try {
     const _s = await getGuildSettings(interaction.guild.id);
     const channelId = await createTicketChannel(interaction.guild, interaction.user, pending.mcid, pending.purchaseId, product, getPurchaseCtx(_s));
@@ -1666,4 +1746,184 @@ function extractField(interaction: ButtonInteraction, fieldNameFragment: string)
     const field = embed.fields.find((f) => f.name.includes(fieldNameFragment));
     return field ? field.value.replace(/`/g, "").trim() : null;
   } catch { return null; }
+}
+
+// ── Autorank: admin permission guard ─────────────────────────────────────
+
+function assertAdmin(interaction: ChatInputCommandInteraction): boolean {
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    void interaction.reply({ content: "❌ このコマンドは管理者権限を持つメンバーのみ使用できます。", flags: 64 });
+    return false;
+  }
+  return true;
+}
+
+// ── Autorank: modal builder ───────────────────────────────────────────────
+
+function buildAutorankSettingsModal(prefill?: AutorankSettingsData | null): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId("autorank_settings_modal")
+    .setTitle("🔧 自動ランク付与設定（RCON）");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("rcon_host").setLabel("RCONホスト（IPまたはドメイン）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: mc.example.com")
+        .setValue(prefill?.rconHost ?? "").setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("rcon_port").setLabel("RCONポート番号")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: 25575")
+        .setValue(prefill?.rconPort?.toString() ?? "25575").setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("rcon_password").setLabel("RCONパスワード")
+        .setStyle(TextInputStyle.Short).setPlaceholder("server.properties の rcon.password")
+        .setValue(prefill?.rconPassword ?? "").setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("cmd_permanent")
+        .setLabel("永久版コマンド（{mcid} がIDに置換されます）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus")
+        .setValue(prefill?.commandPermanent ?? "").setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("cmd_1month")
+        .setLabel("1ヶ月版コマンド（{mcid} がIDに置換されます）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus-month")
+        .setValue(prefill?.command1month ?? "").setRequired(true)
+    ),
+  );
+  return modal;
+}
+
+// ── /autorank_settings — show modal ──────────────────────────────────────
+
+async function handleAutorankSettingsCommand(interaction: ChatInputCommandInteraction) {
+  if (!assertAdmin(interaction)) return;
+  const settings = await getAutorankSettings(interaction.guildId!);
+  await interaction.showModal(buildAutorankSettingsModal(settings));
+}
+
+// ── autorank_settings_modal submit ────────────────────────────────────────
+
+async function handleAutorankSettingsModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+
+  const host    = interaction.fields.getTextInputValue("rcon_host").trim();
+  const portStr = interaction.fields.getTextInputValue("rcon_port").trim();
+  const pass    = interaction.fields.getTextInputValue("rcon_password").trim();
+  const cmdPerm = interaction.fields.getTextInputValue("cmd_permanent").trim();
+  const cmd1m   = interaction.fields.getTextInputValue("cmd_1month").trim();
+
+  const port = parseInt(portStr, 10);
+  if (isNaN(port) || port < 1 || port > 65535) {
+    await interaction.editReply("❌ ポート番号が無効です（1〜65535 の整数を入力してください）。");
+    return;
+  }
+
+  try {
+    await saveAutorankSettings(interaction.guildId!, {
+      rconHost: host, rconPort: port, rconPassword: pass,
+      commandPermanent: cmdPerm, command1month: cmd1m,
+    });
+
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.Green)
+          .setTitle("✅ 自動ランク付与設定を保存しました")
+          .addFields(
+            { name: "🌐 RCONホスト",   value: host,                         inline: true },
+            { name: "🔌 RCONポート",   value: port.toString(),               inline: true },
+            { name: "🔑 RCONパスワード", value: "••••••••（保存済み）",         inline: true },
+            { name: "♾️ 永久版コマンド", value: `\`${cmdPerm}\``,             inline: false },
+            { name: "⏰ 1ヶ月版コマンド", value: `\`${cmd1m}\``,              inline: false },
+          )
+          .setDescription("有効にするには `/autorank_status status:true` を実行してください。")
+          .setTimestamp()
+      ],
+    });
+  } catch (err) {
+    logger.error({ err }, "Failed to save autorank settings");
+    await interaction.editReply("❌ 設定の保存に失敗しました。");
+  }
+}
+
+// ── /autorank_status ──────────────────────────────────────────────────────
+
+async function handleAutorankStatusCommand(interaction: ChatInputCommandInteraction) {
+  if (!assertAdmin(interaction)) return;
+
+  const status  = interaction.options.getBoolean("status", true);
+  const guildId = interaction.guildId!;
+  await interaction.deferReply({ flags: 64 });
+
+  try {
+    if (status) {
+      const settings = await getAutorankSettings(guildId);
+      if (!settings) {
+        await interaction.editReply(
+          "❌ RCON設定が未完了です。先に `/autorank_settings` でRCON接続情報を設定してください。"
+        );
+        return;
+      }
+    }
+
+    await setAutorankEnabled(guildId, status);
+    await interaction.editReply(
+      status
+        ? "✅ 自動ランク付与モードを **ON** にしました。購入番号確認後、自動でDiscordロール＋ゲーム内ランクが付与されます。"
+        : "🔒 自動ランク付与モードを **OFF** にしました。通常のチケット制（手動承認）に戻りました。"
+    );
+  } catch (err) {
+    logger.error({ err }, "Failed to set autorank status");
+    await interaction.editReply("❌ 設定の変更に失敗しました。");
+  }
+}
+
+// ── /autorank_settings_view ───────────────────────────────────────────────
+
+async function handleAutorankSettingsViewCommand(interaction: ChatInputCommandInteraction) {
+  if (!assertAdmin(interaction)) return;
+  await interaction.deferReply({ flags: 64 });
+
+  const [settings, enabled] = await Promise.all([
+    getAutorankSettings(interaction.guildId!),
+    isAutorankEnabled(interaction.guildId!),
+  ]);
+
+  if (!settings) {
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.Orange)
+          .setTitle("⚙️ 自動ランク付与設定")
+          .setDescription("❌ まだ設定されていません。`/autorank_settings` で設定してください。")
+          .addFields({ name: "ステータス", value: "🔒 無効", inline: true }),
+      ],
+    });
+    return;
+  }
+
+  await interaction.editReply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(enabled ? Colors.Green : 0x888888)
+        .setTitle("⚙️ 自動ランク付与設定")
+        .addFields(
+          { name: "🔄 ステータス",      value: enabled ? "✅ 有効（自動付与）" : "🔒 無効（手動チケット制）", inline: false },
+          { name: "🌐 RCONホスト",      value: settings.rconHost,              inline: true },
+          { name: "🔌 RCONポート",      value: settings.rconPort.toString(),    inline: true },
+          { name: "🔑 RCONパスワード",  value: "••••••••",                      inline: true },
+          { name: "♾️ 永久版コマンド",  value: `\`${settings.commandPermanent}\``, inline: false },
+          { name: "⏰ 1ヶ月版コマンド", value: `\`${settings.command1month}\``,    inline: false },
+        )
+        .setTimestamp()
+    ],
+  });
 }

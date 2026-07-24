@@ -3,6 +3,7 @@ import {
   Client,
   GatewayIntentBits,
   Partials,
+  PermissionFlagsBits,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -89,6 +90,26 @@ const commands = [
     .addSubcommand((sub) =>
       sub.setName("view").setDescription("現在のパネル設定を表示します")
     )
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("autorank_settings")
+    .setDescription("自動Minecraftランク付与のRCON設定を行います（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("autorank_status")
+    .setDescription("自動ランク付与モードのON/OFFを切り替えます（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addBooleanOption((o) =>
+      o.setName("status")
+        .setDescription("true = 自動付与ON、false = 手動チケット制")
+        .setRequired(true)
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("autorank_settings_view")
+    .setDescription("現在の自動ランク付与設定を表示します（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .toJSON(),
   new SlashCommandBuilder()
     .setName("embed")
