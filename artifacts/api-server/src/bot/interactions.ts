@@ -953,7 +953,10 @@ async function handleRankApprove(
         { name: "付与期間", value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true }
       ).setTimestamp()
     );
-    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id, 0x00BFFF, interaction.channelId);
+    // 自動付与済みの場合はスタッフがゲーム内付与する必要がないため通知しない
+    if (!autorankOn) {
+      await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id, 0x00BFFF, interaction.channelId);
+    }
 
     // チケットに確認メッセージを送信
     if (interaction.channel instanceof TextChannel) {
@@ -1168,7 +1171,10 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
       components: [],
     });
 
-    await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", "メディアランク 📺", false, expiresAt, interaction.user.id, Colors.Red, interaction.channelId);
+    // 自動付与済みの場合はスタッフがゲーム内付与する必要がないため通知しない
+    if (!mediaAutorankOn) {
+      await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", "メディアランク 📺", false, expiresAt, interaction.user.id, Colors.Red, interaction.channelId);
+    }
     await sendDM(targetMember, new EmbedBuilder()
       .setColor(Colors.Green).setTitle("✅ メディアランク申請が承認されました")
       .setDescription(mediaAutorankOn
