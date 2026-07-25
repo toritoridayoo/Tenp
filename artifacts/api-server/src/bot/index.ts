@@ -92,8 +92,13 @@ const commands = [
     )
     .toJSON(),
   new SlashCommandBuilder()
+    .setName("autorank_rcon")
+    .setDescription("VelocityとLobbyのRCON接続情報を設定します（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName("autorank_settings")
-    .setDescription("自動Minecraftランク付与のRCON設定を行います（管理者専用）")
+    .setDescription("ランク付与コマンド（Velocity/Lobby）とロールIDを設定します（管理者専用）")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .toJSON(),
   new SlashCommandBuilder()

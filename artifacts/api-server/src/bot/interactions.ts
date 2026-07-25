@@ -28,9 +28,9 @@ import { handlePanelSettingsSet, handlePanelSettingsView } from "./panelSettings
 import { setStaffAppOpen, isRequestCloseEnabled, setRequestCloseEnabled } from "./staffAppStatus.js";
 import {
   getAutorankSettings, isAutorankEnabled, isMediaAutorankEnabled,
-  saveAutorankSettings, saveMediaAutorankSettings,
+  saveRconSettings, saveRankCommands, saveMediaCommands,
   setAutorankEnabled, setMediaAutorankEnabled,
-  grantMinecraftRank, grantMinecraftMediaRank,
+  grantMinecraftRank, grantMinecraftMediaRank, buildRconNote,
   type AutorankSettingsData,
 } from "./autorankSettings.js";
 import { isStaffInGuild, getGuildSettings, getPurchaseCtx, getSupportCtx } from "./guildConfig.js";
@@ -83,6 +83,7 @@ export async function handleInteraction(interaction: Interaction) {
     if (interaction.commandName === "requestclose") {
       await handleRequestCloseCommand(interaction);
     }
+    if (interaction.commandName === "autorank_rcon")                await handleAutorankRconCommand(interaction);
     if (interaction.commandName === "autorank_settings")            await handleAutorankSettingsCommand(interaction);
     if (interaction.commandName === "autorank_status")              await handleAutorankStatusCommand(interaction);
     if (interaction.commandName === "autorank_settings_view")       await handleAutorankSettingsViewCommand(interaction);
@@ -481,6 +482,7 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   if (interaction.customId === "appeal_modal")  { await handleAppealModalSubmit(interaction);  return; }
   if (interaction.customId === "inquiry_modal") { await handleInquiryModalSubmit(interaction); return; }
 
+  if (interaction.customId === "autorank_rcon_modal")           { await handleAutorankRconModalSubmit(interaction);          return; }
   if (interaction.customId === "autorank_settings_modal")       { await handleAutorankSettingsModalSubmit(interaction);      return; }
   if (interaction.customId === "media_autorank_settings_modal") { await handleMediaAutorankSettingsModalSubmit(interaction); return; }
 
@@ -912,12 +914,10 @@ async function handleRankApprove(
     await targetMember.roles.add(roleId, "Booth購入承認");
     let rconNote = "";
     if (autorankOn && autorankCfg && mcid) {
-      try {
-        await grantMinecraftRank(mcid, product, autorankCfg);
-        rconNote = "✅ ゲーム内ランク自動付与済み";
-      } catch (rconErr) {
-        logger.error({ rconErr }, "RCON failed during rank approve");
-        rconNote = "⚠️ RCON接続エラー（ゲーム内付与は手動確認が必要です）";
+      const result = await grantMinecraftRank(mcid, product, autorankCfg);
+      rconNote = buildRconNote(result);
+      if (!result.velocityOk || !result.lobbyOk) {
+        logger.error({ result }, "RCON partial failure during rank approve");
       }
     }
 
@@ -1138,13 +1138,11 @@ async function handleMediaApprove(interaction: ButtonInteraction, targetUserId: 
     const mediaRoleId = autorankCfg?.mediaRankRoleId || botConfig.mediaGrantRoleId;
     await targetMember.roles.add(mediaRoleId, "メディアランク承認");
     let rconNote = "";
-    if (mediaAutorankOn && autorankCfg?.commandMedia && mcid) {
-      try {
-        await grantMinecraftMediaRank(mcid, autorankCfg);
-        rconNote = "✅ ゲーム内ランク自動付与済み";
-      } catch (rconErr) {
-        logger.error({ rconErr }, "RCON failed during media rank approve");
-        rconNote = "⚠️ RCON接続エラー（ゲーム内付与は手動確認が必要です）";
+    if (mediaAutorankOn && autorankCfg && mcid) {
+      const result = await grantMinecraftMediaRank(mcid, autorankCfg);
+      rconNote = buildRconNote(result);
+      if (!result.velocityOk || !result.lobbyOk) {
+        logger.error({ result }, "RCON partial failure during media rank approve");
       }
     }
 
@@ -1779,46 +1777,139 @@ function assertAdmin(interaction: ChatInputCommandInteraction): boolean {
 
 // ── Autorank: modal builder ───────────────────────────────────────────────
 
-function buildAutorankSettingsModal(prefill?: AutorankSettingsData | null): ModalBuilder {
+// ── /autorank_rcon modal builder ──────────────────────────────────────────
+
+function buildAutorankRconModal(prefill?: AutorankSettingsData | null): ModalBuilder {
   const modal = new ModalBuilder()
-    .setCustomId("autorank_settings_modal")
-    .setTitle("🔧 自動ランク付与設定（RCON）");
-  // ホスト:ポートを1フィールドに統合してロールID欄を確保（モーダル上限5フィールド）
-  const hostPort = prefill
-    ? `${prefill.rconHost}:${prefill.rconPort}`
-    : "";
+    .setCustomId("autorank_rcon_modal")
+    .setTitle("🔌 RCON接続設定（Velocity / Lobby）");
+  const velHostPort = prefill?.velocity ? `${prefill.velocity.host}:${prefill.velocity.port}` : "";
+  const lobHostPort = prefill?.lobby    ? `${prefill.lobby.host}:${prefill.lobby.port}`       : "";
   modal.addComponents(
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
-        .setCustomId("rcon_host_port").setLabel("RCONアドレス（ホスト:ポート）")
+        .setCustomId("velocity_host_port").setLabel("VelocityのRCONアドレス（ホスト:ポート）")
         .setStyle(TextInputStyle.Short).setPlaceholder("例: mc.example.com:25575")
-        .setValue(hostPort).setRequired(true)
+        .setValue(velHostPort).setRequired(true)
     ),
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
-        .setCustomId("rcon_password").setLabel("RCONパスワード")
-        .setStyle(TextInputStyle.Short).setPlaceholder("server.properties の rcon.password")
-        .setValue(prefill?.rconPassword ?? "").setRequired(true)
+        .setCustomId("velocity_password").setLabel("VelocityのRCONパスワード")
+        .setStyle(TextInputStyle.Short).setPlaceholder("velocity の rcon.password")
+        .setValue(prefill?.velocity?.password ?? "").setRequired(true)
     ),
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
-        .setCustomId("cmd_permanent")
-        .setLabel("永久版コマンド（{mcid} がIDに置換されます）")
+        .setCustomId("lobby_host_port").setLabel("LobbyのRCONアドレス（ホスト:ポート）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: mc.example.com:25576")
+        .setValue(lobHostPort).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("lobby_password").setLabel("LobbyのRCONパスワード")
+        .setStyle(TextInputStyle.Short).setPlaceholder("lobby の rcon.password")
+        .setValue(prefill?.lobby?.password ?? "").setRequired(true)
+    ),
+  );
+  return modal;
+}
+
+// ── /autorank_rcon — show modal ───────────────────────────────────────────
+
+async function handleAutorankRconCommand(interaction: ChatInputCommandInteraction) {
+  if (!assertAdmin(interaction)) return;
+  const settings = await getAutorankSettings(interaction.guildId!);
+  await interaction.showModal(buildAutorankRconModal(settings));
+}
+
+// ── autorank_rcon_modal submit ────────────────────────────────────────────
+
+async function handleAutorankRconModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+
+  const velRaw  = interaction.fields.getTextInputValue("velocity_host_port").trim();
+  const velPass = interaction.fields.getTextInputValue("velocity_password").trim();
+  const lobRaw  = interaction.fields.getTextInputValue("lobby_host_port").trim();
+  const lobPass = interaction.fields.getTextInputValue("lobby_password").trim();
+
+  function parseHostPort(raw: string, label: string): { host: string; port: number } | null {
+    const i = raw.lastIndexOf(":");
+    const host = i !== -1 ? raw.slice(0, i) : raw;
+    const port = parseInt(i !== -1 ? raw.slice(i + 1) : "", 10);
+    if (!host || isNaN(port) || port < 1 || port > 65535) return null;
+    return { host, port };
+  }
+
+  const vel = parseHostPort(velRaw, "Velocity");
+  const lob = parseHostPort(lobRaw, "Lobby");
+  if (!vel) { await interaction.editReply("❌ VelocityのRCONアドレスが無効です（例: `mc.example.com:25575`）。"); return; }
+  if (!lob) { await interaction.editReply("❌ LobbyのRCONアドレスが無効です（例: `mc.example.com:25576`）。"); return; }
+
+  try {
+    await saveRconSettings(interaction.guildId!, vel.host, vel.port, velPass, lob.host, lob.port, lobPass);
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(Colors.Green)
+          .setTitle("✅ RCON接続情報を保存しました")
+          .addFields(
+            { name: "🚀 Velocity ホスト", value: vel.host,           inline: true },
+            { name: "🔌 Velocity ポート", value: vel.port.toString(), inline: true },
+            { name: "🔑 Velocity パスワード", value: "••••••（保存済み）", inline: true },
+            { name: "🏠 Lobby ホスト",    value: lob.host,           inline: true },
+            { name: "🔌 Lobby ポート",    value: lob.port.toString(), inline: true },
+            { name: "🔑 Lobby パスワード", value: "••••••（保存済み）", inline: true },
+          )
+          .setDescription("次に `/autorank_settings` でランク付与コマンドを設定してください。")
+          .setTimestamp()
+      ],
+    });
+  } catch (err) {
+    logger.error({ err }, "Failed to save RCON settings");
+    await interaction.editReply("❌ 設定の保存に失敗しました。");
+  }
+}
+
+// ── /autorank_settings modal builder ─────────────────────────────────────
+
+function buildAutorankSettingsModal(prefill?: AutorankSettingsData | null): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId("autorank_settings_modal")
+    .setTitle("⚔️ ランクコマンド設定（Velocity / Lobby）");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("cmd_permanent_velocity")
+        .setLabel("永久版 — Velocityコマンド（{mcid}→MC ID）")
         .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus")
-        .setValue(prefill?.commandPermanent ?? "").setRequired(true)
+        .setValue(prefill?.cmdPermanentVelocity ?? "").setRequired(false)
     ),
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
-        .setCustomId("cmd_1month")
-        .setLabel("1ヶ月版コマンド（{mcid} がIDに置換されます）")
+        .setCustomId("cmd_permanent_lobby")
+        .setLabel("永久版 — Lobbyコマンド（{mcid}→MC ID）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus")
+        .setValue(prefill?.cmdPermanentLobby ?? "").setRequired(false)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("cmd_1month_velocity")
+        .setLabel("1ヶ月版 — Velocityコマンド（{mcid}→MC ID）")
         .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus-month")
-        .setValue(prefill?.command1month ?? "").setRequired(true)
+        .setValue(prefill?.cmd1monthVelocity ?? "").setRequired(false)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("cmd_1month_lobby")
+        .setLabel("1ヶ月版 — Lobbyコマンド（{mcid}→MC ID）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus-month")
+        .setValue(prefill?.cmd1monthLobby ?? "").setRequired(false)
     ),
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
         .setCustomId("rank_role_id")
         .setLabel("付与するDiscordロールID（任意）")
-        .setStyle(TextInputStyle.Short).setPlaceholder("例: 123456789012345678（空欄=env変数のロールを使用）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("空欄=env変数のロールを使用")
         .setValue(prefill?.rankRoleId ?? "").setRequired(false)
     ),
   );
@@ -1838,49 +1929,40 @@ async function handleAutorankSettingsCommand(interaction: ChatInputCommandIntera
 async function handleAutorankSettingsModalSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: 64 });
 
-  const hostPort  = interaction.fields.getTextInputValue("rcon_host_port").trim();
-  const pass      = interaction.fields.getTextInputValue("rcon_password").trim();
-  const cmdPerm   = interaction.fields.getTextInputValue("cmd_permanent").trim();
-  const cmd1m     = interaction.fields.getTextInputValue("cmd_1month").trim();
-  const roleIdRaw = interaction.fields.getTextInputValue("rank_role_id").trim();
-  const rankRoleId = roleIdRaw || null;
-
-  // Parse "host:port"
-  const lastColon = hostPort.lastIndexOf(":");
-  const host = lastColon !== -1 ? hostPort.slice(0, lastColon) : hostPort;
-  const portStr = lastColon !== -1 ? hostPort.slice(lastColon + 1) : "";
-  const port = parseInt(portStr, 10);
-  if (!host || isNaN(port) || port < 1 || port > 65535) {
-    await interaction.editReply("❌ RCONアドレスの形式が無効です（例: `mc.example.com:25575`）。");
-    return;
-  }
+  const cmdPermVel  = interaction.fields.getTextInputValue("cmd_permanent_velocity").trim() || null;
+  const cmdPermLob  = interaction.fields.getTextInputValue("cmd_permanent_lobby").trim()    || null;
+  const cmd1mVel    = interaction.fields.getTextInputValue("cmd_1month_velocity").trim()    || null;
+  const cmd1mLob    = interaction.fields.getTextInputValue("cmd_1month_lobby").trim()       || null;
+  const rankRoleId  = interaction.fields.getTextInputValue("rank_role_id").trim()           || null;
 
   try {
-    await saveAutorankSettings(interaction.guildId!, {
-      rconHost: host, rconPort: port, rconPassword: pass,
-      commandPermanent: cmdPerm, command1month: cmd1m,
+    await saveRankCommands(
+      interaction.guildId!,
+      cmdPermVel ?? "", cmdPermLob ?? "",
+      cmd1mVel   ?? "", cmd1mLob   ?? "",
       rankRoleId,
-    });
-
+    );
+    const fmtCmd = (v: string | null) => v ? `\`${v}\`` : "（未設定）";
     await interaction.editReply({
       embeds: [
         new EmbedBuilder()
           .setColor(Colors.Green)
-          .setTitle("✅ 自動ランク付与設定を保存しました")
+          .setTitle("✅ ランクコマンドを保存しました")
           .addFields(
-            { name: "🌐 RCONホスト",      value: host,                  inline: true },
-            { name: "🔌 RCONポート",      value: port.toString(),        inline: true },
-            { name: "🔑 RCONパスワード",  value: "••••••••（保存済み）",  inline: true },
-            { name: "♾️ 永久版コマンド",  value: `\`${cmdPerm}\``,       inline: false },
-            { name: "⏰ 1ヶ月版コマンド", value: `\`${cmd1m}\``,         inline: false },
-            { name: "🎭 付与ロールID",    value: rankRoleId ? `<@&${rankRoleId}>（\`${rankRoleId}\`）` : "未設定（env変数のロールを使用）", inline: false },
+            { name: "♾️ 永久版 Velocity",  value: fmtCmd(cmdPermVel), inline: true },
+            { name: "♾️ 永久版 Lobby",     value: fmtCmd(cmdPermLob), inline: true },
+            { name: "\u200b", value: "\u200b", inline: true },
+            { name: "⏰ 1ヶ月版 Velocity", value: fmtCmd(cmd1mVel),   inline: true },
+            { name: "⏰ 1ヶ月版 Lobby",    value: fmtCmd(cmd1mLob),   inline: true },
+            { name: "\u200b", value: "\u200b", inline: true },
+            { name: "🎭 付与ロールID", value: rankRoleId ? `<@&${rankRoleId}>` : "未設定（env変数を使用）", inline: false },
           )
           .setDescription("有効にするには `/autorank_status status:true` を実行してください。")
           .setTimestamp()
       ],
     });
   } catch (err) {
-    logger.error({ err }, "Failed to save autorank settings");
+    logger.error({ err }, "Failed to save rank commands");
     await interaction.editReply("❌ 設定の保存に失敗しました。");
   }
 }
@@ -1897,9 +1979,15 @@ async function handleAutorankStatusCommand(interaction: ChatInputCommandInteract
   try {
     if (status) {
       const settings = await getAutorankSettings(guildId);
-      if (!settings) {
+      if (!settings?.velocity && !settings?.lobby) {
         await interaction.editReply(
-          "❌ RCON設定が未完了です。先に `/autorank_settings` でRCON接続情報を設定してください。"
+          "❌ RCON設定が未完了です。先に `/autorank_rcon` でVelocity/LobbyのRCON接続情報を設定してください。"
+        );
+        return;
+      }
+      if (!settings.cmdPermanentVelocity && !settings.cmdPermanentLobby && !settings.cmd1monthVelocity && !settings.cmd1monthLobby) {
+        await interaction.editReply(
+          "❌ ランクコマンドが未設定です。先に `/autorank_settings` でコマンドを設定してください。"
         );
         return;
       }
@@ -1928,13 +2016,15 @@ async function handleAutorankSettingsViewCommand(interaction: ChatInputCommandIn
     isAutorankEnabled(interaction.guildId!),
   ]);
 
+  const fmtCmd = (v: string | null | undefined) => v ? `\`${v}\`` : "未設定";
+
   if (!settings) {
     await interaction.editReply({
       embeds: [
         new EmbedBuilder()
           .setColor(Colors.Orange)
           .setTitle("⚙️ 自動ランク付与設定")
-          .setDescription("❌ まだ設定されていません。`/autorank_settings` で設定してください。")
+          .setDescription("❌ まだ設定されていません。まず `/autorank_rcon` でRCON接続を、次に `/autorank_settings` でコマンドを設定してください。")
           .addFields({ name: "ステータス", value: "🔒 無効", inline: true }),
       ],
     });
@@ -1947,12 +2037,16 @@ async function handleAutorankSettingsViewCommand(interaction: ChatInputCommandIn
         .setColor(enabled ? Colors.Green : 0x888888)
         .setTitle("⚙️ 自動ランク付与設定")
         .addFields(
-          { name: "🔄 ステータス",      value: enabled ? "✅ 有効（自動付与）" : "🔒 無効（手動チケット制）", inline: false },
-          { name: "🌐 RCONホスト",      value: settings.rconHost,              inline: true },
-          { name: "🔌 RCONポート",      value: settings.rconPort.toString(),    inline: true },
-          { name: "🔑 RCONパスワード",  value: "••••••••",                      inline: true },
-          { name: "♾️ 永久版コマンド",  value: `\`${settings.commandPermanent}\``, inline: false },
-          { name: "⏰ 1ヶ月版コマンド", value: `\`${settings.command1month}\``,    inline: false },
+          { name: "🔄 ステータス",          value: enabled ? "✅ 有効（自動付与）" : "🔒 無効（手動チケット制）", inline: false },
+          { name: "🚀 Velocity ホスト",     value: settings.velocity ? `${settings.velocity.host}:${settings.velocity.port}` : "未設定", inline: true },
+          { name: "🏠 Lobby ホスト",        value: settings.lobby    ? `${settings.lobby.host}:${settings.lobby.port}`       : "未設定", inline: true },
+          { name: "♾️ 永久版 Velocity",     value: fmtCmd(settings.cmdPermanentVelocity), inline: true },
+          { name: "♾️ 永久版 Lobby",        value: fmtCmd(settings.cmdPermanentLobby),    inline: true },
+          { name: "\u200b", value: "\u200b", inline: true },
+          { name: "⏰ 1ヶ月版 Velocity",    value: fmtCmd(settings.cmd1monthVelocity),    inline: true },
+          { name: "⏰ 1ヶ月版 Lobby",       value: fmtCmd(settings.cmd1monthLobby),       inline: true },
+          { name: "\u200b", value: "\u200b", inline: true },
+          { name: "🎭 付与ロールID",        value: settings.rankRoleId ? `<@&${settings.rankRoleId}>` : "未設定（env変数を使用）", inline: false },
         )
         .setTimestamp()
     ],
@@ -1964,33 +2058,27 @@ async function handleAutorankSettingsViewCommand(interaction: ChatInputCommandIn
 function buildMediaAutorankSettingsModal(prefill?: AutorankSettingsData | null): ModalBuilder {
   const modal = new ModalBuilder()
     .setCustomId("media_autorank_settings_modal")
-    .setTitle("🔧 メディアランク自動付与設定（RCON）");
-  const hostPort = prefill ? `${prefill.rconHost}:${prefill.rconPort}` : "";
+    .setTitle("📺 メディアランクコマンド設定");
   modal.addComponents(
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
-        .setCustomId("rcon_host_port").setLabel("RCONアドレス（ホスト:ポート）")
-        .setStyle(TextInputStyle.Short).setPlaceholder("例: mc.example.com:25575")
-        .setValue(hostPort).setRequired(true)
-    ),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder()
-        .setCustomId("rcon_password").setLabel("RCONパスワード")
-        .setStyle(TextInputStyle.Short).setPlaceholder("server.properties の rcon.password")
-        .setValue(prefill?.rconPassword ?? "").setRequired(true)
-    ),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder()
-        .setCustomId("cmd_media")
-        .setLabel("メディアランクコマンド（{mcid} がIDに置換されます）")
+        .setCustomId("cmd_media_velocity")
+        .setLabel("メディアランク — Velocityコマンド（{mcid}→MC ID）")
         .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus-media")
-        .setValue(prefill?.commandMedia ?? "").setRequired(true)
+        .setValue(prefill?.cmdMediaVelocity ?? "").setRequired(false)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("cmd_media_lobby")
+        .setLabel("メディアランク — Lobbyコマンド（{mcid}→MC ID）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: lp user {mcid} parent add toriplus-media")
+        .setValue(prefill?.cmdMediaLobby ?? "").setRequired(false)
     ),
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder()
         .setCustomId("media_rank_role_id")
         .setLabel("付与するDiscordロールID（任意）")
-        .setStyle(TextInputStyle.Short).setPlaceholder("例: 123456789012345678（空欄=env変数のロールを使用）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("空欄=env変数のロールを使用")
         .setValue(prefill?.mediaRankRoleId ?? "").setRequired(false)
     ),
   );
@@ -2010,42 +2098,29 @@ async function handleMediaAutorankSettingsCommand(interaction: ChatInputCommandI
 async function handleMediaAutorankSettingsModalSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: 64 });
 
-  const hostPort      = interaction.fields.getTextInputValue("rcon_host_port").trim();
-  const pass          = interaction.fields.getTextInputValue("rcon_password").trim();
-  const cmdMedia      = interaction.fields.getTextInputValue("cmd_media").trim();
-  const roleIdRaw     = interaction.fields.getTextInputValue("media_rank_role_id").trim();
-  const mediaRankRoleId = roleIdRaw || null;
+  const cmdMediaVel    = interaction.fields.getTextInputValue("cmd_media_velocity").trim() || null;
+  const cmdMediaLob    = interaction.fields.getTextInputValue("cmd_media_lobby").trim()    || null;
+  const mediaRankRoleId = interaction.fields.getTextInputValue("media_rank_role_id").trim() || null;
 
-  const lastColon = hostPort.lastIndexOf(":");
-  const host = lastColon !== -1 ? hostPort.slice(0, lastColon) : hostPort;
-  const portStr = lastColon !== -1 ? hostPort.slice(lastColon + 1) : "";
-  const port = parseInt(portStr, 10);
-  if (!host || isNaN(port) || port < 1 || port > 65535) {
-    await interaction.editReply("❌ RCONアドレスの形式が無効です（例: `mc.example.com:25575`）。");
-    return;
-  }
-
+  const fmtCmd = (v: string | null) => v ? `\`${v}\`` : "（未設定）";
   try {
-    await saveMediaAutorankSettings(interaction.guildId!, host, port, pass, cmdMedia, mediaRankRoleId);
-
+    await saveMediaCommands(interaction.guildId!, cmdMediaVel ?? "", cmdMediaLob ?? "", mediaRankRoleId);
     await interaction.editReply({
       embeds: [
         new EmbedBuilder()
           .setColor(Colors.Green)
-          .setTitle("✅ メディアランク自動付与設定を保存しました")
+          .setTitle("✅ メディアランクコマンドを保存しました")
           .addFields(
-            { name: "🌐 RCONホスト",      value: host,                  inline: true },
-            { name: "🔌 RCONポート",      value: port.toString(),        inline: true },
-            { name: "🔑 RCONパスワード",  value: "••••••••（保存済み）",  inline: true },
-            { name: "📺 メディアコマンド", value: `\`${cmdMedia}\``,      inline: false },
-            { name: "🎭 付与ロールID",    value: mediaRankRoleId ? `<@&${mediaRankRoleId}>（\`${mediaRankRoleId}\`）` : "未設定（env変数のロールを使用）", inline: false },
+            { name: "📺 Velocityコマンド", value: fmtCmd(cmdMediaVel),    inline: true },
+            { name: "📺 Lobbyコマンド",    value: fmtCmd(cmdMediaLob),    inline: true },
+            { name: "🎭 付与ロールID",     value: mediaRankRoleId ? `<@&${mediaRankRoleId}>` : "未設定（env変数を使用）", inline: false },
           )
           .setDescription("有効にするには `/media_autorank_status status:true` を実行してください。")
           .setTimestamp()
       ],
     });
   } catch (err) {
-    logger.error({ err }, "Failed to save media autorank settings");
+    logger.error({ err }, "Failed to save media commands");
     await interaction.editReply("❌ 設定の保存に失敗しました。");
   }
 }
@@ -2062,9 +2137,15 @@ async function handleMediaAutorankStatusCommand(interaction: ChatInputCommandInt
   try {
     if (status) {
       const settings = await getAutorankSettings(guildId);
-      if (!settings?.commandMedia) {
+      if (!settings?.velocity && !settings?.lobby) {
         await interaction.editReply(
-          "❌ メディアランクのRCON設定が未完了です。先に `/media_autorank_settings` で設定してください。"
+          "❌ RCON設定が未完了です。先に `/autorank_rcon` でVelocity/LobbyのRCON接続情報を設定してください。"
+        );
+        return;
+      }
+      if (!settings.cmdMediaVelocity && !settings.cmdMediaLobby) {
+        await interaction.editReply(
+          "❌ メディアランクコマンドが未設定です。先に `/media_autorank_settings` でコマンドを設定してください。"
         );
         return;
       }
@@ -2093,13 +2174,15 @@ async function handleMediaAutorankSettingsViewCommand(interaction: ChatInputComm
     isMediaAutorankEnabled(interaction.guildId!),
   ]);
 
-  if (!settings?.commandMedia) {
+  const fmtCmd = (v: string | null | undefined) => v ? `\`${v}\`` : "未設定";
+
+  if (!settings?.cmdMediaVelocity && !settings?.cmdMediaLobby) {
     await interaction.editReply({
       embeds: [
         new EmbedBuilder()
           .setColor(Colors.Orange)
           .setTitle("⚙️ メディアランク自動付与設定")
-          .setDescription("❌ まだ設定されていません。`/media_autorank_settings` で設定してください。")
+          .setDescription("❌ まだ設定されていません。`/autorank_rcon` でRCON接続、`/media_autorank_settings` でコマンドを設定してください。")
           .addFields({ name: "ステータス", value: "🔒 無効", inline: true }),
       ],
     });
@@ -2112,11 +2195,12 @@ async function handleMediaAutorankSettingsViewCommand(interaction: ChatInputComm
         .setColor(enabled ? Colors.Green : 0x888888)
         .setTitle("⚙️ メディアランク自動付与設定")
         .addFields(
-          { name: "🔄 ステータス",     value: enabled ? "✅ 有効（自動付与）" : "🔒 無効（手動付与）", inline: false },
-          { name: "🌐 RCONホスト",     value: settings.rconHost,              inline: true },
-          { name: "🔌 RCONポート",     value: settings.rconPort.toString(),    inline: true },
-          { name: "🔑 RCONパスワード", value: "••••••••",                      inline: true },
-          { name: "📺 メディアコマンド", value: `\`${settings.commandMedia}\``, inline: false },
+          { name: "🔄 ステータス",         value: enabled ? "✅ 有効（自動付与）" : "🔒 無効（手動付与）", inline: false },
+          { name: "🚀 Velocity ホスト",    value: settings.velocity ? `${settings.velocity.host}:${settings.velocity.port}` : "未設定", inline: true },
+          { name: "🏠 Lobby ホスト",       value: settings.lobby    ? `${settings.lobby.host}:${settings.lobby.port}`       : "未設定", inline: true },
+          { name: "📺 Velocityコマンド",   value: fmtCmd(settings.cmdMediaVelocity), inline: false },
+          { name: "📺 Lobbyコマンド",      value: fmtCmd(settings.cmdMediaLobby),    inline: false },
+          { name: "🎭 付与ロールID",       value: settings.mediaRankRoleId ? `<@&${settings.mediaRankRoleId}>` : "未設定（env変数を使用）", inline: false },
         )
         .setTimestamp()
     ],

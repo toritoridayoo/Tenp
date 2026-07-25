@@ -6,15 +6,23 @@ import type { ProductType } from "./ticketCreation.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+export type RconTarget = {
+  host:     string;
+  port:     number;
+  password: string;
+};
+
 export type AutorankSettingsData = {
-  rconHost:         string;
-  rconPort:         number;
-  rconPassword:     string;
-  commandPermanent: string;
-  command1month:    string;
-  commandMedia:     string | null;
-  rankRoleId:       string | null;
-  mediaRankRoleId:  string | null;
+  velocity:             RconTarget | null;
+  lobby:                RconTarget | null;
+  cmdPermanentVelocity: string | null;
+  cmdPermanentLobby:    string | null;
+  cmd1monthVelocity:    string | null;
+  cmd1monthLobby:       string | null;
+  cmdMediaVelocity:     string | null;
+  cmdMediaLobby:        string | null;
+  rankRoleId:           string | null;
+  mediaRankRoleId:      string | null;
 };
 
 // ── In-memory cache (5 min TTL) ───────────────────────────────────────────
@@ -41,18 +49,29 @@ async function loadCache(guildId: string): Promise<AutorankCache> {
   ]);
 
   const row = settingsRows[0];
-  const settings: AutorankSettingsData | null = row
-    ? {
-        rconHost:         row.rconHost,
-        rconPort:         row.rconPort,
-        rconPassword:     row.rconPassword,
-        commandPermanent: row.commandPermanent,
-        command1month:    row.command1month,
-        commandMedia:     row.commandMedia ?? null,
-        rankRoleId:       row.rankRoleId ?? null,
-        mediaRankRoleId:  row.mediaRankRoleId ?? null,
-      }
-    : null;
+  let settings: AutorankSettingsData | null = null;
+  if (row) {
+    const velocity: RconTarget | null =
+      row.velocityHost && row.velocityPort != null && row.velocityPassword
+        ? { host: row.velocityHost, port: row.velocityPort, password: row.velocityPassword }
+        : null;
+    const lobby: RconTarget | null =
+      row.lobbyHost && row.lobbyPort != null && row.lobbyPassword
+        ? { host: row.lobbyHost, port: row.lobbyPort, password: row.lobbyPassword }
+        : null;
+    settings = {
+      velocity,
+      lobby,
+      cmdPermanentVelocity: row.cmdPermanentVelocity ?? null,
+      cmdPermanentLobby:    row.cmdPermanentLobby    ?? null,
+      cmd1monthVelocity:    row.cmd1monthVelocity    ?? null,
+      cmd1monthLobby:       row.cmd1monthLobby       ?? null,
+      cmdMediaVelocity:     row.cmdMediaVelocity     ?? null,
+      cmdMediaLobby:        row.cmdMediaLobby        ?? null,
+      rankRoleId:           row.rankRoleId           ?? null,
+      mediaRankRoleId:      row.mediaRankRoleId      ?? null,
+    };
+  }
 
   const flags = flagRows[0];
   return {
@@ -90,12 +109,9 @@ export async function isMediaAutorankEnabled(guildId: string): Promise<boolean> 
   return (await getCache(guildId)).mediaEnabled;
 }
 
-// ── Rank autorank save ────────────────────────────────────────────────────
+// ── Upsert helper ─────────────────────────────────────────────────────────
 
-export async function saveAutorankSettings(
-  guildId: string,
-  data: Omit<AutorankSettingsData, "commandMedia" | "mediaRankRoleId">,
-): Promise<void> {
+async function upsertAutorankRow(guildId: string, patch: Partial<Omit<typeof autorankSettingsTable.$inferInsert, "guildId">>) {
   const existing = await db
     .select({ guildId: autorankSettingsTable.guildId })
     .from(autorankSettingsTable)
@@ -104,44 +120,57 @@ export async function saveAutorankSettings(
   if (existing.length > 0) {
     await db
       .update(autorankSettingsTable)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...patch, updatedAt: new Date() })
       .where(eq(autorankSettingsTable.guildId, guildId));
   } else {
-    await db.insert(autorankSettingsTable).values({
-      guildId, ...data, commandMedia: null, mediaRankRoleId: null,
-    });
+    await db.insert(autorankSettingsTable).values({ guildId, ...patch });
   }
   invalidateAutorankCache(guildId);
 }
 
-// ── Media autorank save ───────────────────────────────────────────────────
+// ── RCON settings save ────────────────────────────────────────────────────
 
-export async function saveMediaAutorankSettings(
-  guildId:        string,
-  rconHost:       string,
-  rconPort:       number,
-  rconPassword:   string,
-  commandMedia:   string,
-  mediaRankRoleId: string | null,
+export async function saveRconSettings(
+  guildId:          string,
+  velocityHost:     string,
+  velocityPort:     number,
+  velocityPassword: string,
+  lobbyHost:        string,
+  lobbyPort:        number,
+  lobbyPassword:    string,
 ): Promise<void> {
-  const existing = await db
-    .select()
-    .from(autorankSettingsTable)
-    .where(eq(autorankSettingsTable.guildId, guildId));
+  await upsertAutorankRow(guildId, {
+    velocityHost, velocityPort, velocityPassword,
+    lobbyHost, lobbyPort, lobbyPassword,
+  });
+}
 
-  if (existing.length > 0) {
-    // Preserve existing rank commands; only update RCON + commandMedia + mediaRankRoleId
-    await db
-      .update(autorankSettingsTable)
-      .set({ rconHost, rconPort, rconPassword, commandMedia, mediaRankRoleId, updatedAt: new Date() })
-      .where(eq(autorankSettingsTable.guildId, guildId));
-  } else {
-    await db.insert(autorankSettingsTable).values({
-      guildId, rconHost, rconPort, rconPassword,
-      commandPermanent: "", command1month: "", commandMedia, mediaRankRoleId,
-    });
-  }
-  invalidateAutorankCache(guildId);
+// ── Rank commands save ────────────────────────────────────────────────────
+
+export async function saveRankCommands(
+  guildId:              string,
+  cmdPermanentVelocity: string,
+  cmdPermanentLobby:    string,
+  cmd1monthVelocity:    string,
+  cmd1monthLobby:       string,
+  rankRoleId:           string | null,
+): Promise<void> {
+  await upsertAutorankRow(guildId, {
+    cmdPermanentVelocity, cmdPermanentLobby,
+    cmd1monthVelocity,    cmd1monthLobby,
+    rankRoleId,
+  });
+}
+
+// ── Media commands save ───────────────────────────────────────────────────
+
+export async function saveMediaCommands(
+  guildId:          string,
+  cmdMediaVelocity: string,
+  cmdMediaLobby:    string,
+  mediaRankRoleId:  string | null,
+): Promise<void> {
+  await upsertAutorankRow(guildId, { cmdMediaVelocity, cmdMediaLobby, mediaRankRoleId });
 }
 
 // ── Flag setters ──────────────────────────────────────────────────────────
@@ -170,18 +199,18 @@ export async function setMediaAutorankEnabled(guildId: string, enabled: boolean)
 
 // ── RCON execution ─────────────────────────────────────────────────────────
 
-async function runRcon(settings: Pick<AutorankSettingsData, "rconHost" | "rconPort" | "rconPassword">, command: string): Promise<string> {
+async function runRcon(target: RconTarget, command: string): Promise<string> {
   const rcon = new Rcon({
-    host:     settings.rconHost,
-    port:     settings.rconPort,
-    password: settings.rconPassword,
+    host:     target.host,
+    port:     target.port,
+    password: target.password,
     timeout:  10_000,
   });
   try {
     await rcon.connect();
     const response = await rcon.send(command);
     await rcon.end();
-    logger.info({ command, response }, "RCON command executed");
+    logger.info({ host: target.host, port: target.port, command, response }, "RCON command executed");
     return response;
   } catch (err) {
     await rcon.end().catch(() => {});
@@ -189,21 +218,71 @@ async function runRcon(settings: Pick<AutorankSettingsData, "rconHost" | "rconPo
   }
 }
 
+// ── Rank grant (Velocity + Lobby in parallel) ─────────────────────────────
+
+export type GrantResult = {
+  velocityOk:    boolean;
+  velocityError: string | null;
+  lobbyOk:       boolean;
+  lobbyError:    string | null;
+};
+
 export async function grantMinecraftRank(
   mcid:     string,
   product:  ProductType,
   settings: AutorankSettingsData,
-): Promise<string> {
-  const template = product === "permanent" ? settings.commandPermanent : settings.command1month;
-  const command  = template.replace(/\{mcid\}/gi, mcid);
-  return runRcon(settings, command);
+): Promise<GrantResult> {
+  const isPermament = product === "permanent";
+  const cmdVelocity = (isPermament ? settings.cmdPermanentVelocity : settings.cmd1monthVelocity)?.replace(/\{mcid\}/gi, mcid) ?? null;
+  const cmdLobby    = (isPermament ? settings.cmdPermanentLobby    : settings.cmd1monthLobby   )?.replace(/\{mcid\}/gi, mcid) ?? null;
+
+  const [velResult, lobbyResult] = await Promise.all([
+    settings.velocity && cmdVelocity
+      ? runRcon(settings.velocity, cmdVelocity).then(() => null).catch((e: unknown) => String(e))
+      : Promise.resolve(settings.velocity && cmdVelocity ? null : "未設定"),
+    settings.lobby && cmdLobby
+      ? runRcon(settings.lobby, cmdLobby).then(() => null).catch((e: unknown) => String(e))
+      : Promise.resolve(settings.lobby && cmdLobby ? null : "未設定"),
+  ]);
+
+  return {
+    velocityOk:    velResult === null,
+    velocityError: velResult,
+    lobbyOk:       lobbyResult === null,
+    lobbyError:    lobbyResult,
+  };
 }
+
+// ── Media rank grant ──────────────────────────────────────────────────────
 
 export async function grantMinecraftMediaRank(
   mcid:     string,
   settings: AutorankSettingsData,
-): Promise<string> {
-  if (!settings.commandMedia) throw new Error("commandMedia is not configured");
-  const command = settings.commandMedia.replace(/\{mcid\}/gi, mcid);
-  return runRcon(settings, command);
+): Promise<GrantResult> {
+  const cmdVelocity = settings.cmdMediaVelocity?.replace(/\{mcid\}/gi, mcid) ?? null;
+  const cmdLobby    = settings.cmdMediaLobby?.replace(/\{mcid\}/gi, mcid)    ?? null;
+
+  const [velResult, lobbyResult] = await Promise.all([
+    settings.velocity && cmdVelocity
+      ? runRcon(settings.velocity, cmdVelocity).then(() => null).catch((e: unknown) => String(e))
+      : Promise.resolve("未設定"),
+    settings.lobby && cmdLobby
+      ? runRcon(settings.lobby, cmdLobby).then(() => null).catch((e: unknown) => String(e))
+      : Promise.resolve("未設定"),
+  ]);
+
+  return {
+    velocityOk:    velResult === null,
+    velocityError: velResult,
+    lobbyOk:       lobbyResult === null,
+    lobbyError:    lobbyResult,
+  };
+}
+
+// ── Grant result → human-readable note ───────────────────────────────────
+
+export function buildRconNote(result: GrantResult): string {
+  const vel   = result.velocityOk ? "✅ Velocity: 成功" : `⚠️ Velocity: ${result.velocityError ?? "エラー"}`;
+  const lobby = result.lobbyOk    ? "✅ Lobby: 成功"    : `⚠️ Lobby: ${result.lobbyError    ?? "エラー"}`;
+  return `${vel}\n${lobby}`;
 }
