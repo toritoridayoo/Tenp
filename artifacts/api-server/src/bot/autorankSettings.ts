@@ -210,12 +210,22 @@ async function runRcon(target: RconTarget, command: string): Promise<string> {
     await rcon.connect();
     const response = await rcon.send(command);
     await rcon.end();
-    logger.info({ host: target.host, port: target.port, command, response }, "RCON command executed");
+    logger.info("RCON command executed");
     return response;
   } catch (err) {
     await rcon.end().catch(() => {});
     throw err;
   }
+}
+
+function toSafeRconError(error: unknown): string {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  if (typeof code === "string" && /^[A-Z0-9_]+$/.test(code)) {
+    return `接続エラー (${code})`;
+  }
+  return "RCON接続またはコマンド実行に失敗しました";
 }
 
 // ── Rank grant (Velocity + Lobby in parallel) ─────────────────────────────
@@ -238,10 +248,10 @@ export async function grantMinecraftRank(
 
   const [velResult, lobbyResult] = await Promise.all([
     settings.velocity && cmdVelocity
-      ? runRcon(settings.velocity, cmdVelocity).then(() => null).catch((e: unknown) => String(e))
+      ? runRcon(settings.velocity, cmdVelocity).then(() => null).catch((e: unknown) => toSafeRconError(e))
       : Promise.resolve(settings.velocity && cmdVelocity ? null : "未設定"),
     settings.lobby && cmdLobby
-      ? runRcon(settings.lobby, cmdLobby).then(() => null).catch((e: unknown) => String(e))
+      ? runRcon(settings.lobby, cmdLobby).then(() => null).catch((e: unknown) => toSafeRconError(e))
       : Promise.resolve(settings.lobby && cmdLobby ? null : "未設定"),
   ]);
 
@@ -264,10 +274,10 @@ export async function grantMinecraftMediaRank(
 
   const [velResult, lobbyResult] = await Promise.all([
     settings.velocity && cmdVelocity
-      ? runRcon(settings.velocity, cmdVelocity).then(() => null).catch((e: unknown) => String(e))
+      ? runRcon(settings.velocity, cmdVelocity).then(() => null).catch((e: unknown) => toSafeRconError(e))
       : Promise.resolve("未設定"),
     settings.lobby && cmdLobby
-      ? runRcon(settings.lobby, cmdLobby).then(() => null).catch((e: unknown) => String(e))
+      ? runRcon(settings.lobby, cmdLobby).then(() => null).catch((e: unknown) => toSafeRconError(e))
       : Promise.resolve("未設定"),
   ]);
 

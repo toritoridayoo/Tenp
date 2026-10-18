@@ -35,7 +35,7 @@ export const KEY_QUANTITIES: Record<string, number[]> = {
 // ── Support close row builder ─────────────────────────────────────────────
 
 export function buildSupportCloseRow(
-  type: "bug" | "report" | "appeal" | "inquiry",
+  type: "bug" | "report" | "appeal" | "inquiry" | "giveaway",
   userId: string,
   showRequestClose?: boolean,
 ): ActionRowBuilder<ButtonBuilder> {
@@ -418,6 +418,7 @@ export async function createReportTicketChannel(
 export async function createAppealTicketChannel(
   guild: Guild,
   user: User,
+  banId: string,
   mcid: string,
   details: string,
   ctx?: PanelCtx,
@@ -440,6 +441,7 @@ export async function createAppealTicketChannel(
     .setDescription(`<@${user.id}> から異議申し立てが届きました。\nスタッフは確認・対応後、クローズしてください。`)
     .addFields(
       { name: "👤 申請者", value: `<@${user.id}> (${user.tag})`, inline: true },
+      { name: "🆔 Ban ID", value: `\`${banId}\``, inline: true },
       { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
       { name: "📝 詳細", value: details, inline: false }
     )
@@ -454,12 +456,13 @@ export async function createAppealTicketChannel(
 
   await sendSupportTicketLog(guild, user, [
     { name: "📂 種別", value: "異議申し立て", inline: true },
+    { name: "🆔 Ban ID", value: `\`${banId}\``, inline: true },
     { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
     { name: "📝 詳細", value: details, inline: false },
     { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
   ], ctx?.logChannelId);
 
-  logger.info({ userId: user.id, mcid, channelId: ticketChannel.id }, "Appeal ticket created");
+  logger.info({ userId: user.id, banId, mcid, channelId: ticketChannel.id }, "Appeal ticket created");
   return ticketChannel.id;
 }
 
@@ -507,6 +510,55 @@ export async function createInquiryTicketChannel(
   ], ctx?.logChannelId);
 
   logger.info({ userId: user.id, channelId: ticketChannel.id }, "Inquiry ticket created");
+  return ticketChannel.id;
+}
+
+// ── Giveaway claim ticket ─────────────────────────────────────────────────
+
+export async function createGiveawayTicketChannel(
+  guild: Guild,
+  user: User,
+  mcid: string,
+  prize: string,
+  ctx?: PanelCtx,
+  showRequestClose?: boolean,
+): Promise<string> {
+  const categoryId = ctx?.categoryId || botConfig.supportTicketCategoryId || botConfig.ticketChannelId;
+  const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "") || "user";
+  const ticketChannel = await guild.channels.create({
+    name: `［🎁］Giveaway受取-${safeMcid}`,
+    type: ChannelType.GuildText,
+    parent: categoryId,
+    permissionOverwrites: buildSupportPermissionOverwrites(guild, user.id, ctx?.staffIds),
+  });
+
+  const row = buildSupportCloseRow("giveaway", user.id, showRequestClose);
+  const embed = new EmbedBuilder()
+    .setColor(Colors.Gold)
+    .setTitle("🎁 Giveaway受け取りチケット")
+    .setDescription(`<@${user.id}> からGiveaway賞品の受け取り申請が届きました。\nスタッフが当選内容を確認して手動で対応してください。`)
+    .addFields(
+      { name: "👤 申請者", value: `<@${user.id}> (${user.tag})`, inline: true },
+      { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+      { name: "🏆 当選したGiveaway・賞品", value: prize, inline: false },
+    )
+    .setTimestamp()
+    .setFooter({ text: `ユーザーID: ${user.id}` });
+
+  await ticketChannel.send({
+    content: buildMentions(user.id, ctx?.staffIds),
+    embeds: [embed],
+    components: [row],
+  });
+
+  await sendSupportTicketLog(guild, user, [
+    { name: "📂 種別", value: "Giveaway受け取り", inline: true },
+    { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+    { name: "🏆 当選したGiveaway・賞品", value: prize, inline: false },
+    { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
+  ], ctx?.logChannelId);
+
+  logger.info({ userId: user.id, mcid, channelId: ticketChannel.id }, "Giveaway claim ticket created");
   return ticketChannel.id;
 }
 

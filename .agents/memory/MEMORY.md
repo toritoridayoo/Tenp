@@ -1,0 +1,1 @@
+- [Giveaway claims](giveaway-claims.md) — Giveaway rewards are handled manually through support tickets; do not add automatic claiming.

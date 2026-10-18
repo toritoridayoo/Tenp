@@ -52,6 +52,7 @@ import {
   createReportTicketChannel,
   createAppealTicketChannel,
   createInquiryTicketChannel,
+  createGiveawayTicketChannel,
   PRODUCT_LABELS,
   KEY_QUANTITIES,
   type ProductType,
@@ -134,11 +135,12 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   if (customId === "open_report_ticket")  { await interaction.showModal(buildReportModal());  return; }
   if (customId === "open_appeal_ticket")  { await interaction.showModal(buildAppealModal());  return; }
   if (customId === "open_inquiry_ticket") { await interaction.showModal(buildInquiryModal()); return; }
+  if (customId === "open_giveaway_ticket") { await interaction.showModal(buildGiveawayModal()); return; }
 
   // User close request button (ticket opener only)
-  const reqCloseMatch = customId.match(/^req_close_(bug|report|appeal|inquiry)_(\d+)$/);
+  const reqCloseMatch = customId.match(/^req_close_(bug|report|appeal|inquiry|giveaway)_(\d+)$/);
   if (reqCloseMatch) {
-    const type = reqCloseMatch[1] as "bug" | "report" | "appeal" | "inquiry";
+    const type = reqCloseMatch[1] as "bug" | "report" | "appeal" | "inquiry" | "giveaway";
     const ownerId = reqCloseMatch[2]!;
     if (interaction.user.id !== ownerId) {
       await interaction.reply({ content: "❌ このボタンはチケットの申請者のみ押せます。", flags: 64 });
@@ -168,7 +170,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   }
 
   // User close confirm
-  const reqCloseConfirmMatch = customId.match(/^req_close_confirm_(bug|report|appeal|inquiry)_(\d+)$/);
+  const reqCloseConfirmMatch = customId.match(/^req_close_confirm_(bug|report|appeal|inquiry|giveaway)_(\d+)$/);
   if (reqCloseConfirmMatch) {
     const ownerId = reqCloseConfirmMatch[2]!;
     if (interaction.user.id !== ownerId) {
@@ -188,7 +190,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   }
 
   // Support ticket close buttons: show reason modal first
-  const closeTicketMatch = customId.match(/^close_ticket_(bug|report|appeal|inquiry)_(\d+)$/);
+  const closeTicketMatch = customId.match(/^close_ticket_(bug|report|appeal|inquiry|giveaway)_(\d+)$/);
   if (closeTicketMatch) {
     const member = interaction.member as GuildMember | null;
     if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
@@ -196,7 +198,7 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       return;
     }
     await interaction.showModal(buildCloseReasonModal(
-      closeTicketMatch[1] as "bug" | "report" | "appeal" | "inquiry",
+      closeTicketMatch[1] as "bug" | "report" | "appeal" | "inquiry" | "giveaway",
       closeTicketMatch[2]!,
       interaction.message.id
     ));
@@ -383,8 +385,14 @@ function buildInquiryModal(): ModalBuilder {
   return modal;
 }
 
-function buildCloseReasonModal(type: "bug" | "report" | "appeal" | "inquiry", targetId: string, messageId: string): ModalBuilder {
-  const titles = { bug: "🐛 バグ報告を対応済みにする", report: "🚨 通報チケットを対応済みにする", appeal: "⚖️ 異議申し立てを対応済みにする", inquiry: "❓ お問い合わせを対応済みにする" };
+function buildCloseReasonModal(type: "bug" | "report" | "appeal" | "inquiry" | "giveaway", targetId: string, messageId: string): ModalBuilder {
+  const titles = {
+    bug: "🐛 バグ報告を対応済みにする",
+    report: "🚨 通報チケットを対応済みにする",
+    appeal: "⚖️ 異議申し立てを対応済みにする",
+    inquiry: "❓ お問い合わせを対応済みにする",
+    giveaway: "🎁 Giveaway受け取りを対応済みにする",
+  };
   const modal = new ModalBuilder()
     .setCustomId(`close_reason_modal_${type}_${targetId}_${messageId}`)
     .setTitle(titles[type]);
@@ -445,6 +453,11 @@ function buildAppealModal(): ModalBuilder {
   const modal = new ModalBuilder().setCustomId("appeal_modal").setTitle("⚖️ 異議申し立て");
   modal.addComponents(
     new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("ban_id_input").setLabel("Ban ID")
+        .setStyle(TextInputStyle.Short).setPlaceholder("処分通知に記載されたBan ID")
+        .setMaxLength(100).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder().setCustomId("mcid_input").setLabel("Minecraft ID")
         .setStyle(TextInputStyle.Short).setPlaceholder("例: Steve123")
         .setMinLength(3).setMaxLength(16).setRequired(true)
@@ -453,6 +466,23 @@ function buildAppealModal(): ModalBuilder {
       new TextInputBuilder().setCustomId("appeal_detail_input").setLabel("詳細")
         .setStyle(TextInputStyle.Paragraph).setPlaceholder("申し立ての理由・状況を詳しく教えてください。")
         .setMinLength(10).setMaxLength(1000).setRequired(true)
+    )
+  );
+  return modal;
+}
+
+function buildGiveawayModal(): ModalBuilder {
+  const modal = new ModalBuilder().setCustomId("giveaway_modal").setTitle("🎁 Giveaway受け取り申請");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("giveaway_mcid_input").setLabel("Minecraft ID")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: Steve123")
+        .setMinLength(3).setMaxLength(16).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("giveaway_prize_input").setLabel("当選したGiveaway・賞品")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: 〇月開催 Giveaway / 賞品名")
+        .setMinLength(2).setMaxLength(100).setRequired(true)
     )
   );
   return modal;
@@ -481,6 +511,7 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   if (interaction.customId === "report_modal")  { await handleReportModalSubmit(interaction);  return; }
   if (interaction.customId === "appeal_modal")  { await handleAppealModalSubmit(interaction);  return; }
   if (interaction.customId === "inquiry_modal") { await handleInquiryModalSubmit(interaction); return; }
+  if (interaction.customId === "giveaway_modal") { await handleGiveawayModalSubmit(interaction); return; }
 
   if (interaction.customId === "autorank_rcon_modal")           { await handleAutorankRconModalSubmit(interaction);          return; }
   if (interaction.customId === "autorank_settings_modal")       { await handleAutorankSettingsModalSubmit(interaction);      return; }
@@ -491,8 +522,8 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   if (rejectModal) { await handleRejectReasonSubmit(interaction, rejectModal[1] as "rank" | "key" | "media", rejectModal[2]!, rejectModal[3]!); return; }
 
   // Close reason modals: close_reason_modal_{type}_{userId}_{messageId}
-  const closeModal = interaction.customId.match(/^close_reason_modal_(bug|report|appeal|inquiry)_(\d+)_(\d+)$/);
-  if (closeModal) { await handleCloseTicket(interaction, closeModal[1] as "bug" | "report" | "appeal" | "inquiry", closeModal[2]!, closeModal[3]!); return; }
+  const closeModal = interaction.customId.match(/^close_reason_modal_(bug|report|appeal|inquiry|giveaway)_(\d+)_(\d+)$/);
+  if (closeModal) { await handleCloseTicket(interaction, closeModal[1] as "bug" | "report" | "appeal" | "inquiry" | "giveaway", closeModal[2]!, closeModal[3]!); return; }
 }
 
 // ── Rank modal → product selection ────────────────────────────────────────
@@ -769,16 +800,35 @@ async function handleReportModalSubmit(interaction: ModalSubmitInteraction) {
 
 async function handleAppealModalSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: 64 });
+  const banId   = interaction.fields.getTextInputValue("ban_id_input").trim();
   const mcid    = interaction.fields.getTextInputValue("mcid_input").trim();
   const details = interaction.fields.getTextInputValue("appeal_detail_input").trim();
   if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
   try {
     const _s = await getGuildSettings(interaction.guild.id);
     const _rcEnabled = await isRequestCloseEnabled(interaction.guild.id);
-    const channelId = await createAppealTicketChannel(interaction.guild, interaction.user, mcid, details, getSupportCtx(_s), _rcEnabled);
+    const channelId = await createAppealTicketChannel(interaction.guild, interaction.user, banId, mcid, details, getSupportCtx(_s), _rcEnabled);
     await interaction.editReply(`✅ 異議申し立てチケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
   } catch (err) {
     logger.error({ err }, "Failed to create appeal ticket channel");
+    await interaction.editReply("❌ チケットの作成中にエラーが発生しました。");
+  }
+}
+
+async function handleGiveawayModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+  const mcid = interaction.fields.getTextInputValue("giveaway_mcid_input").trim();
+  const prize = interaction.fields.getTextInputValue("giveaway_prize_input").trim();
+  if (!interaction.guild) { await interaction.editReply("サーバー情報を取得できませんでした。"); return; }
+  try {
+    const settings = await getGuildSettings(interaction.guild.id);
+    const requestCloseEnabled = await isRequestCloseEnabled(interaction.guild.id);
+    const channelId = await createGiveawayTicketChannel(
+      interaction.guild, interaction.user, mcid, prize, getSupportCtx(settings), requestCloseEnabled,
+    );
+    await interaction.editReply(`✅ Giveaway受け取りチケットを作成しました！\n<#${channelId}>\nスタッフが確認次第、対応します。`);
+  } catch (err) {
+    logger.error({ err }, "Failed to create giveaway ticket channel");
     await interaction.editReply("❌ チケットの作成中にエラーが発生しました。");
   }
 }
@@ -802,7 +852,7 @@ async function handleInquiryModalSubmit(interaction: ModalSubmitInteraction) {
 
 async function handleCloseTicket(
   interaction: ModalSubmitInteraction,
-  type: "bug" | "report" | "appeal" | "inquiry",
+  type: "bug" | "report" | "appeal" | "inquiry" | "giveaway",
   targetUserId: string,
   messageId: string,
 ) {
@@ -815,7 +865,7 @@ async function handleCloseTicket(
   }
 
   const reason = interaction.fields.getTextInputValue("close_reason_input").trim();
-  const typeLabels = { bug: "バグ報告", report: "プレイヤー通報", appeal: "異議申し立て", inquiry: "その他のお問い合わせ" };
+  const typeLabels = { bug: "バグ報告", report: "プレイヤー通報", appeal: "異議申し立て", inquiry: "その他のお問い合わせ", giveaway: "Giveaway受け取り" };
   const label = typeLabels[type];
   const channel = interaction.channel as TextChannel | null;
 
@@ -851,6 +901,7 @@ async function handleCloseTicket(
         report:  "ご通報いただいた内容について、スタッフが確認・対応を完了しました。ご協力ありがとうございました。",
         appeal:  "異議申し立ての内容について、スタッフが確認・対応を完了しました。ご不明な点があればお気軽にお問い合わせください。",
         inquiry: "お問い合わせいただいた内容について、スタッフが確認・対応を完了しました。ご不明な点があればお気軽にお問い合わせください。",
+        giveaway: "Giveawayの受け取り申請について、スタッフが対応を完了しました。",
       };
       const dmEmbed = new EmbedBuilder()
         .setColor(Colors.Green)

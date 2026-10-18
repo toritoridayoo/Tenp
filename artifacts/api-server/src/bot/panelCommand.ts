@@ -44,6 +44,8 @@ export async function handleTicketPanelSendCommand(
         "　BAN・ミュートなどの処分への異議申し立て\n\n" +
         "❓ **その他のお問い合わせ**\n" +
         "　上記に当てはまらないご質問・ご相談\n\n" +
+        "🎁 **Giveaway受け取り**\n" +
+        "　当選したGiveawayの賞品受け取り申請\n\n" +
         "> スタッフが確認次第、対応します。"
       )
       .setFooter({ text: "虚偽の報告はペナルティの対象になる場合があります" })
@@ -65,7 +67,11 @@ export async function handleTicketPanelSendCommand(
       new ButtonBuilder()
         .setCustomId("open_inquiry_ticket")
         .setLabel("❓ その他")
-        .setStyle(ButtonStyle.Secondary)
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("open_giveaway_ticket")
+        .setLabel("🎁 Giveaway受け取り")
+        .setStyle(ButtonStyle.Success)
     );
 
     const staffRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
