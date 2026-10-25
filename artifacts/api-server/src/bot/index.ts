@@ -18,8 +18,22 @@ import { startScheduler } from "./scheduler.js";
 const commands = [
   new SlashCommandBuilder()
     .setName("purchase_send")
-    .setDescription("Booth購入申請パネルを指定チャンネルに送信します（スタッフ専用）")
+    .setDescription("購入申請パネルを指定チャンネルに送信します（スタッフ専用）")
     .addChannelOption((o) => o.setName("channel").setDescription("パネルを送信するテキストチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("purchase_settings")
+    .setDescription("ランク申請の購入受付モードをBoothまたはAmazonギフト券に切り替えます（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption((o) =>
+      o.setName("mode")
+        .setDescription("ランク申請で受け付ける購入方法")
+        .setRequired(true)
+        .addChoices(
+          { name: "Booth", value: "booth" },
+          { name: "Amazonギフト券", value: "amazon" },
+        )
+    )
     .toJSON(),
   new SlashCommandBuilder()
     .setName("ticketpanel_send")

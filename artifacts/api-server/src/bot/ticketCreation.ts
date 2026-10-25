@@ -167,6 +167,76 @@ export async function createTicketChannel(
   return ticketChannel.id;
 }
 
+export async function createAmazonRankTicketChannel(
+  guild: Guild,
+  user: User,
+  mcid: string,
+  giftCardCode: string,
+  amount: string,
+  productDescription: string,
+  ctx?: PanelCtx,
+): Promise<string> {
+  const categoryId = ctx?.categoryId || botConfig.ticketChannelId;
+  const safeMcid = mcid.toLowerCase().replace(/[^a-z0-9_]/g, "") || "user";
+  const ticketChannel = await guild.channels.create({
+    name: `［🎁］Amazonランク申請-${safeMcid}`,
+    type: ChannelType.GuildText,
+    parent: categoryId,
+    permissionOverwrites: buildPermissionOverwrites(guild, user.id, ctx?.staffIds),
+  });
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`approve_permanent_${user.id}`)
+      .setLabel("🌟 永久ランクで承認")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`approve_1month_${user.id}`)
+      .setLabel("⏰ 1ヶ月ランクで承認")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`reject_${user.id}`)
+      .setLabel("❌ 却下")
+      .setStyle(ButtonStyle.Danger),
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor(Colors.Yellow)
+    .setTitle("🎮 Amazonギフト券でのランク申請")
+    .setDescription(
+      `<@${user.id}> からランク申請が届きました。\n` +
+      "内容を確認し、適切なランクの承認ボタンを選んでください。",
+    )
+    .addFields(
+      { name: "👤 申請者", value: `<@${user.id}> (${user.tag})`, inline: true },
+      { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+      { name: "🧾 購入番号", value: "Amazonギフト券申請", inline: true },
+      { name: "🎁 Amazonギフト券番号", value: giftCardCode, inline: false },
+      { name: "💴 金額", value: amount, inline: true },
+      { name: "📦 申請商品（記述）", value: productDescription, inline: false },
+    )
+    .setTimestamp()
+    .setFooter({ text: `ユーザーID: ${user.id}` });
+
+  await ticketChannel.send({
+    content: buildMentions(user.id, ctx?.staffIds),
+    embeds: [embed],
+    components: [row],
+  });
+
+  // Gift-card codes are redeemable value: deliberately exclude the code from logs.
+  await sendTicketLog(guild, user, [
+    { name: "📂 種別", value: "Amazonギフト券・ランク申請", inline: true },
+    { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
+    { name: "💴 金額", value: amount, inline: true },
+    { name: "📦 申請商品（記述）", value: productDescription, inline: false },
+    { name: "📁 チケット", value: `<#${ticketChannel.id}>`, inline: true },
+  ], ctx?.logChannelId);
+
+  logger.info({ userId: user.id, mcid, channelId: ticketChannel.id }, "Amazon rank ticket created");
+  return ticketChannel.id;
+}
+
 // ── Key/Shard ticket ──────────────────────────────────────────────────────
 
 export async function createKeyTicketChannel(

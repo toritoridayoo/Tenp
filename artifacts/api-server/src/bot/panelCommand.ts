@@ -11,6 +11,7 @@ import {
 import { botConfig } from "./config.js";
 import { isStaffInGuild } from "./guildConfig.js";
 import { logger } from "../lib/logger.js";
+import { getRankPurchaseMode } from "./purchaseSettings.js";
 
 export async function handleTicketPanelSendCommand(
   interaction: ChatInputCommandInteraction
@@ -109,18 +110,20 @@ export async function handlePurchaseSendCommand(
       return;
     }
 
+    const rankPurchaseMode = await getRankPurchaseMode(interaction.guildId ?? "");
+    const rankPaymentLabel = rankPurchaseMode === "amazon" ? "Amazonギフト券" : "Booth";
     const embed = new EmbedBuilder()
       .setColor(Colors.Blurple)
-      .setTitle("🛒 Booth購入申請パネル")
+      .setTitle("🛒 購入・受け取り申請パネル")
       .setDescription(
-        "Boothで商品を購入した方は下のボタンから申請を行ってください。\n\n" +
+        "申請したい内容に合わせて下のボタンを選んでください。\n\n" +
           "🎮 **ランク受け取り**\n" +
-          "　Tori+ランク（永久版 / 1ヶ月版）の付与申請\n\n" +
+          `　Tori+ランク（永久版 / 1ヶ月版）の付与申請（現在の受付: ${rankPaymentLabel}）\n\n` +
           "🔑 **鍵・シャード受け取り**\n" +
-          "　各種キー・シャードの受け取り申請\n\n" +
+          "　Boothで購入した各種キー・シャードの受け取り申請\n\n" +
           "📺 **メディアランク申請**\n" +
           "　YouTubeなどのメディア活動によるランク申請\n\n" +
-          "> 購入番号はBoothの注文確認メールまたはマイページから確認できます。"
+          `> ランク申請の受付モードは管理者が \`/purchase_settings\` で切り替えできます。`
       )
       .setFooter({ text: "スタッフが確認次第、対応します" })
       .setTimestamp();

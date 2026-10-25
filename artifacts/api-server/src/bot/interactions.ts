@@ -25,6 +25,7 @@ import { botConfig } from "./config.js";
 import { logger } from "../lib/logger.js";
 import { handlePurchaseSendCommand, handleTicketPanelSendCommand } from "./panelCommand.js";
 import { handlePanelSettingsSet, handlePanelSettingsView } from "./panelSettingsCommand.js";
+import { getRankPurchaseMode, setRankPurchaseMode, type RankPurchaseMode } from "./purchaseSettings.js";
 import { setStaffAppOpen, isRequestCloseEnabled, setRequestCloseEnabled } from "./staffAppStatus.js";
 import {
   getAutorankSettings, isAutorankEnabled, isMediaAutorankEnabled,
@@ -46,6 +47,7 @@ import {
 import { handleEmbedCommand } from "./embedCommand.js";
 import {
   createTicketChannel,
+  createAmazonRankTicketChannel,
   createKeyTicketChannel,
   createMediaTicketChannel,
   createBugTicketChannel,
@@ -69,6 +71,7 @@ import {
 export async function handleInteraction(interaction: Interaction) {
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === "purchase_send")    await handlePurchaseSendCommand(interaction);
+    if (interaction.commandName === "purchase_settings") await handlePurchaseSettingsCommand(interaction);
     if (interaction.commandName === "ticketpanel_send") await handleTicketPanelSendCommand(interaction);
     if (interaction.commandName === "embed")            await handleEmbedCommand(interaction);
     if (interaction.commandName === "close")            await handleCloseCommand(interaction);
@@ -113,7 +116,16 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
   const { customId } = interaction;
 
   // Purchase panel buttons → open modals
-  if (customId === "open_ticket")       { await interaction.showModal(buildRankModal());   return; }
+  if (customId === "open_ticket") {
+    try {
+      const mode = await getRankPurchaseMode(interaction.guildId ?? "");
+      await interaction.showModal(mode === "amazon" ? buildAmazonRankModal() : buildRankModal());
+    } catch (err) {
+      logger.error({ err }, "Failed to load rank purchase mode");
+      await interaction.reply({ content: "❌ 購入受付モードを取得できませんでした。時間をおいて再度お試しください。", flags: 64 });
+    }
+    return;
+  }
   if (customId === "open_key_ticket")   { await interaction.showModal(buildKeyModal());    return; }
   if (customId === "open_media_ticket") { await interaction.showModal(buildMediaModal());  return; }
 
@@ -315,6 +327,33 @@ function buildRankModal(): ModalBuilder {
   return modal;
 }
 
+function buildAmazonRankModal(): ModalBuilder {
+  const modal = new ModalBuilder().setCustomId("amazon_rank_modal").setTitle("🎁 Amazonギフト券でランク申請");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("mcid_input").setLabel("Minecraft ID（MCID）")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: Steve123")
+        .setMinLength(3).setMaxLength(16).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("amazon_giftcard_code_input").setLabel("Amazonギフト券番号")
+        .setStyle(TextInputStyle.Short).setPlaceholder("ギフト券番号を入力してください")
+        .setMinLength(1).setMaxLength(100).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("amazon_amount_input").setLabel("金額")
+        .setStyle(TextInputStyle.Short).setPlaceholder("例: 5,000円")
+        .setMinLength(1).setMaxLength(30).setRequired(true)
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId("amazon_product_input").setLabel("何の商品か（記述）")
+        .setStyle(TextInputStyle.Paragraph).setPlaceholder("申請する商品・ランクの内容を記入してください")
+        .setMinLength(2).setMaxLength(1000).setRequired(true)
+    )
+  );
+  return modal;
+}
+
 function buildKeyModal(): ModalBuilder {
   const modal = new ModalBuilder().setCustomId("key_modal").setTitle("🔑 鍵・シャード受け取り申請");
   modal.addComponents(
@@ -504,6 +543,7 @@ function buildKeyAddModal(): ModalBuilder {
 
 async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   if (interaction.customId === "rank_modal")    { await handleRankModalSubmit(interaction);   return; }
+  if (interaction.customId === "amazon_rank_modal") { await handleAmazonRankModalSubmit(interaction); return; }
   if (interaction.customId === "key_modal")     { await handleKeyModalSubmit(interaction);    return; }
   if (interaction.customId === "key_add_modal") { await handleKeyAddModalSubmit(interaction); return; }
   if (interaction.customId === "media_modal")   { await handleMediaModalSubmit(interaction);  return; }
@@ -549,6 +589,35 @@ async function handleRankModalSubmit(interaction: ModalSubmitInteraction) {
     .setFooter({ text: "10分以内に選択してください" });
 
   await interaction.editReply({ embeds: [embed], components: [row] });
+}
+
+async function handleAmazonRankModalSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: 64 });
+  const mcid = interaction.fields.getTextInputValue("mcid_input").trim();
+  const giftCardCode = interaction.fields.getTextInputValue("amazon_giftcard_code_input").trim();
+  const amount = interaction.fields.getTextInputValue("amazon_amount_input").trim();
+  const productDescription = interaction.fields.getTextInputValue("amazon_product_input").trim();
+  if (!interaction.guild) {
+    await interaction.editReply("サーバー情報を取得できませんでした。");
+    return;
+  }
+
+  try {
+    const settings = await getGuildSettings(interaction.guild.id);
+    const channelId = await createAmazonRankTicketChannel(
+      interaction.guild,
+      interaction.user,
+      mcid,
+      giftCardCode,
+      amount,
+      productDescription,
+      getPurchaseCtx(settings),
+    );
+    await interaction.editReply(`✅ Amazonギフト券でのランク申請チケットを作成しました。\n<#${channelId}>`);
+  } catch (err) {
+    logger.error({ err }, "Failed to create Amazon rank ticket");
+    await interaction.editReply("❌ チケットの作成中にエラーが発生しました。");
+  }
 }
 
 // ── Rank product selection ────────────────────────────────────────────────
@@ -1830,6 +1899,21 @@ function assertAdmin(interaction: ChatInputCommandInteraction): boolean {
     return false;
   }
   return true;
+}
+
+async function handlePurchaseSettingsCommand(interaction: ChatInputCommandInteraction) {
+  if (!assertAdmin(interaction)) return;
+  const mode = interaction.options.getString("mode", true) as RankPurchaseMode;
+  await interaction.deferReply({ flags: 64 });
+
+  try {
+    await setRankPurchaseMode(interaction.guildId!, mode);
+    const label = mode === "amazon" ? "Amazonギフト券" : "Booth";
+    await interaction.editReply(`✅ ランク申請の受付モードを **${label}** に設定しました。`);
+  } catch (err) {
+    logger.error({ err }, "Failed to save rank purchase mode");
+    await interaction.editReply("❌ 購入受付モードの保存に失敗しました。");
+  }
 }
 
 // ── Autorank: modal builder ───────────────────────────────────────────────

@@ -6,6 +6,7 @@ export const guildFlagsTable = pgTable("guild_flags", {
   requestCloseEnabled: boolean("request_close_enabled").notNull().default(true),
   autorankEnabled:      boolean("autorank_enabled").notNull().default(false),
   mediaAutorankEnabled: boolean("media_autorank_enabled").notNull().default(false),
+  rankPurchaseMode: text("rank_purchase_mode").notNull().default("booth"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

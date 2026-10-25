@@ -1,1 +1,2 @@
 - [Giveaway claims](giveaway-claims.md) — Giveaway rewards are handled manually through support tickets; do not add automatic claiming.
+- [Rank purchase modes](rank-purchase-modes.md) — Rank requests can use Booth or Amazon gift cards per server; Booth remains the default.
