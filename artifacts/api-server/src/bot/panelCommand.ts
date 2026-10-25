@@ -111,37 +111,40 @@ export async function handlePurchaseSendCommand(
     }
 
     const rankPurchaseMode = await getRankPurchaseMode(interaction.guildId ?? "");
+    const isAmazonMode = rankPurchaseMode === "amazon";
     const rankPaymentLabel = rankPurchaseMode === "amazon" ? "Amazonギフト券" : "Booth";
     const embed = new EmbedBuilder()
       .setColor(Colors.Blurple)
       .setTitle("🛒 購入・受け取り申請パネル")
       .setDescription(
         "申請したい内容に合わせて下のボタンを選んでください。\n\n" +
-          "🎮 **ランク受け取り**\n" +
-          `　Tori+ランク（永久版 / 1ヶ月版）の付与申請（現在の受付: ${rankPaymentLabel}）\n\n` +
-          "🔑 **鍵・シャード受け取り**\n" +
-          "　Boothで購入した各種キー・シャードの受け取り申請\n\n" +
+          (isAmazonMode
+            ? "🎁 **特典受け取り**\n　Amazonギフト券でのTori+ランク申請\n\n"
+            : `🎮 **ランク受け取り**\n　Tori+ランク（永久版 / 1ヶ月版）の付与申請（現在の受付: ${rankPaymentLabel}）\n\n`) +
+          (isAmazonMode ? "" : "🔑 **鍵・シャード受け取り**\n　Boothで購入した各種キー・シャードの受け取り申請\n\n") +
           "📺 **メディアランク申請**\n" +
-          "　YouTubeなどのメディア活動によるランク申請\n\n" +
-          `> ランク申請の受付モードは管理者が \`/purchase_settings\` で切り替えできます。`
+          "　YouTubeなどのメディア活動によるランク申請"
       )
       .setFooter({ text: "スタッフが確認次第、対応します" })
       .setTimestamp();
 
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    const buttons: ButtonBuilder[] = [
       new ButtonBuilder()
         .setCustomId("open_ticket")
-        .setLabel("🎮 ランク受け取り")
+        .setLabel(isAmazonMode ? "🎁 特典受け取り" : "🎮 ランク受け取り")
         .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
+    ];
+    if (!isAmazonMode) {
+      buttons.push(new ButtonBuilder()
         .setCustomId("open_key_ticket")
         .setLabel("🔑 鍵・シャード受け取り")
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
+        .setStyle(ButtonStyle.Primary));
+    }
+    buttons.push(new ButtonBuilder()
         .setCustomId("open_media_ticket")
         .setLabel("📺 メディアランク申請")
-        .setStyle(ButtonStyle.Danger)
-    );
+        .setStyle(ButtonStyle.Danger));
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 
     await channel.send({ embeds: [embed], components: [row] });
     await interaction.editReply(`✅ <#${channel.id}> にパネルを送信しました！`);
