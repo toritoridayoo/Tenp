@@ -189,9 +189,18 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       await interaction.reply({ content: "❌ このボタンはチケットの申請者のみ押せます。", flags: 64 });
       return;
     }
-    await interaction.update({ content: "✅ クローズリクエストを受け付けました。", embeds: [], components: [] });
+    await interaction.update({ content: "📄 TXTログを作成してチケットをクローズしています。", embeds: [], components: [] });
     const ch = interaction.channel as TextChannel | null;
-    await closeTicketChannel(ch, ownerId, "ユーザーによるクローズリクエスト");
+    const closed = await closeTicketChannel(ch, {
+      requesterId: ownerId,
+      closedById: ownerId,
+      reason: "ユーザーによるクローズリクエスト",
+    });
+    if (!closed) {
+      await interaction.followUp({ content: "❌ TXTログを送信できなかったため、チャンネルは削除していません。スタッフに確認してください。", flags: 64 });
+    } else {
+      await interaction.followUp({ content: "✅ TXTログを送信し、チケットをクローズしました。", flags: 64 });
+    }
     return;
   }
 
@@ -231,11 +240,19 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
       return;
     }
     await interaction.deferReply({ flags: 64 });
-    await interaction.message.edit({ components: [] });
     const ticketCh = interaction.channel as TextChannel | null;
-    await sendReceiptLog(interaction.guild as Guild | null, ticketCh, receiptUserId);
-    await closeTicketChannel(ticketCh, receiptUserId, "受け取り確認完了");
-    await interaction.editReply("✅ 受け取り確認が完了しました。チケットをクローズします。");
+    const closed = await closeTicketChannel(ticketCh, {
+      requesterId: receiptUserId,
+      closedById: receiptUserId,
+      reason: "受け取り確認完了",
+      title: "✅ チケットクローズ — 受け取り確認完了",
+    });
+    if (closed) {
+      await interaction.message.edit({ components: [] });
+      await interaction.editReply("✅ TXTログを送信し、受け取り確認が完了しました。チケットをクローズします。");
+    } else {
+      await interaction.editReply("❌ TXTログを送信できなかったため、チケットは削除していません。後ほど再度お試しください。");
+    }
     return;
   }
 
@@ -939,6 +956,21 @@ async function handleCloseTicket(
   const channel = interaction.channel as TextChannel | null;
 
   try {
+    const closed = await closeTicketChannel(channel, {
+      requesterId: targetUserId,
+      closedById: interaction.user.id,
+      reason: "対応済み",
+      title: `✅ チケットクローズ — ${label}対応済み`,
+      extraFields: [
+        { name: "✅ 対応スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+        ...(reason ? [{ name: "📝 対応内容", value: reason, inline: false }] : []),
+      ],
+    });
+    if (!closed) {
+      await interaction.editReply("❌ TXTログを送信できなかったため、チケットは削除していません。後ほど再度お試しください。");
+      return;
+    }
+
     // Update ticket message
     if (channel) {
       const ticketMsg = await channel.messages.fetch(messageId).catch(() => null);
@@ -981,21 +1013,6 @@ async function handleCloseTicket(
       await sendDM(targetMember, dmEmbed);
     }
 
-    const _settings = await getGuildSettings((interaction.guild as Guild).id);
-    const supportLogId = getSupportCtx(_settings).logChannelId || botConfig.supportLogChannelId || botConfig.ticketLogChannelId;
-    await sendTicketTranscriptLog(
-      interaction.guild as Guild | null,
-      channel,
-      targetUserId,
-      supportLogId,
-      `✅ チケットクローズ — ${label}対応済み`,
-      [
-        { name: "✅ 対応スタッフ", value: `<@${interaction.user.id}>`, inline: true },
-        ...(reason ? [{ name: "📝 対応内容", value: reason, inline: false }] : []),
-      ],
-    );
-
-    await closeTicketChannel(channel, targetUserId, "対応済み");
     await interaction.editReply("✅ チケットを対応済みとしてクローズしました。");
     logger.info({ targetUserId, type, reason: reason || null, closedBy: interaction.user.id }, "Support ticket closed");
   } catch (err) {
@@ -1143,8 +1160,23 @@ async function handleRejectReasonSubmit(
   const typeLabels = { rank: "ランク申請", key: "鍵・シャード受け取り", media: "メディアランク申請" };
 
   try {
-    // Update the ticket channel message
     const channel = interaction.channel as TextChannel | null;
+    const closed = await closeTicketChannel(channel, {
+      requesterId: targetUserId,
+      closedById: interaction.user.id,
+      reason: "却下",
+      title: `❌ チケット却下 — ${typeLabels[type]}`,
+      extraFields: [
+        { name: "❌ 却下スタッフ", value: `<@${interaction.user.id}>`, inline: true },
+        { name: "❌ 却下理由", value: reason, inline: false },
+      ],
+    });
+    if (!closed) {
+      await interaction.editReply("❌ TXTログを送信できなかったため、チケットは削除していません。後ほど再度お試しください。");
+      return;
+    }
+
+    // Update the ticket channel message
     if (channel) {
       const ticketMsg = await channel.messages.fetch(messageId).catch(() => null);
       if (ticketMsg) {
@@ -1173,8 +1205,6 @@ async function handleRejectReasonSubmit(
       );
     }
 
-    await sendRejectLog(guild, targetUserId, interaction.user.id, typeLabels[type], reason);
-    await closeTicketChannel(channel, targetUserId, "却下");
     await interaction.editReply(`✅ <@${targetUserId}> の申請を却下しました。`);
     logger.info({ targetUserId, type, reason, rejectedBy: interaction.user.id }, "Ticket rejected");
   } catch (err) {
@@ -1603,10 +1633,10 @@ async function handleKeyGrantConfirm(interaction: ButtonInteraction, targetUserI
   }
 }
 
-// ── Receipt log (with txt transcript) ────────────────────────────────────
+// ── Ticket transcript logs ─────────────────────────────────────────────────
 
-function buildTranscript(messages: import("discord.js").Collection<string, import("discord.js").Message>): string {
-  const sorted = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+function buildTranscript(messages: import("discord.js").Message[]): string {
+  const sorted = [...messages].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
   return sorted.map((msg) => {
     const time = new Date(msg.createdTimestamp).toLocaleString("ja-JP");
     const parts: string[] = [];
@@ -1616,6 +1646,12 @@ function buildTranscript(messages: import("discord.js").Collection<string, impor
     for (const embed of msg.embeds) {
       const embedDesc = [embed.title, embed.description].filter(Boolean).join(": ");
       parts.push(`[embed: ${embedDesc || "（内容なし）"}]`);
+      for (const field of embed.fields) {
+        const value = field.name.includes("Amazonギフト券番号")
+          ? "[ギフト券番号は安全のため省略]"
+          : field.value;
+        parts.push(`[field: ${field.name}: ${value}]`);
+      }
     }
 
     for (const att of msg.attachments.values()) {
@@ -1648,20 +1684,66 @@ function buildTranscript(messages: import("discord.js").Collection<string, impor
   }).join("\n");
 }
 
+async function fetchAllTranscriptMessages(channel: TextChannel): Promise<import("discord.js").Message[]> {
+  const messages: import("discord.js").Message[] = [];
+  let before: string | undefined;
+
+  while (true) {
+    const page = await channel.messages.fetch({
+      limit: 100,
+      ...(before ? { before } : {}),
+    });
+    messages.push(...page.values());
+    if (page.size < 100) break;
+
+    const oldest = page.last();
+    if (!oldest || oldest.id === before) break;
+    before = oldest.id;
+  }
+  return messages;
+}
+
+const SUPPORT_TICKET_PREFIXES = ["［🐛］", "［🚨］", "［⚖️］", "［❓］", "［🎁］Giveaway受取-"];
+const PURCHASE_TICKET_PREFIXES = ["［🔔］", "［🎥］", "［🎁］Amazonランク申請-"];
+
+async function resolveTicketLogChannelId(guild: Guild, channel: TextChannel): Promise<string> {
+  const settings = await getGuildSettings(guild.id);
+  const channelName = channel.name;
+
+  if (SUPPORT_TICKET_PREFIXES.some((prefix) => channelName.startsWith(prefix))) {
+    return getSupportCtx(settings).logChannelId || botConfig.supportLogChannelId || botConfig.ticketLogChannelId || "";
+  }
+  if (PURCHASE_TICKET_PREFIXES.some((prefix) => channelName.startsWith(prefix))) {
+    return getPurchaseCtx(settings).logChannelId || botConfig.ticketLogChannelId || "";
+  }
+
+  if (channel.parentId && [settings.support?.categoryId, botConfig.supportTicketCategoryId].includes(channel.parentId)) {
+    return getSupportCtx(settings).logChannelId || botConfig.supportLogChannelId || botConfig.ticketLogChannelId || "";
+  }
+  if (channel.parentId && [settings.purchase?.categoryId, botConfig.ticketChannelId].includes(channel.parentId)) {
+    return getPurchaseCtx(settings).logChannelId || botConfig.ticketLogChannelId || "";
+  }
+  if (channel.parentId && [settings.staff?.categoryId, botConfig.staffInterviewChannelId].includes(channel.parentId)) {
+    return settings.staff?.logChannelId || botConfig.ticketLogChannelId || "";
+  }
+
+  return botConfig.ticketLogChannelId || botConfig.supportLogChannelId || "";
+}
+
 async function sendTicketTranscriptLog(
   guild: Guild | null,
   channel: TextChannel | null,
-  userId: string,
+  userId: string | null,
   logChannelId: string,
   embedTitle: string,
   extraFields: { name: string; value: string; inline: boolean }[] = [],
-): Promise<void> {
-  if (!guild || !channel) return;
+): Promise<boolean> {
+  if (!guild || !channel || !logChannelId) return false;
   try {
     const logCh = await guild.channels.fetch(logChannelId);
-    if (!(logCh instanceof TextChannel)) return;
+    if (!(logCh instanceof TextChannel)) return false;
 
-    const messages = await channel.messages.fetch({ limit: 100 });
+    const messages = await fetchAllTranscriptMessages(channel);
     const txtContent = buildTranscript(messages);
     const attachment = new AttachmentBuilder(Buffer.from(txtContent, "utf-8"), {
       name: `${channel.name}.txt`,
@@ -1672,44 +1754,21 @@ async function sendTicketTranscriptLog(
       .setTitle(embedTitle)
       .addFields(
         { name: "📁 チャンネル", value: `#${channel.name}`, inline: true },
-        { name: "👤 申請者", value: `<@${userId}>`, inline: true },
+        ...(userId ? [{ name: "👤 申請者", value: `<@${userId}>`, inline: true }] : []),
         ...extraFields,
       )
       .setTimestamp()
       .setFooter({ text: `チャンネルID: ${channel.id}` });
 
     await logCh.send({ embeds: [embed], files: [attachment] });
+    return true;
   } catch (err) {
-    logger.error({ err }, "Failed to send ticket transcript log");
-  }
-}
-
-async function sendReceiptLog(guild: Guild | null, channel: TextChannel | null, userId: string): Promise<void> {
-  const logId = guild
-    ? (getPurchaseCtx(await getGuildSettings(guild.id)).logChannelId || botConfig.ticketLogChannelId)
-    : botConfig.ticketLogChannelId;
-  await sendTicketTranscriptLog(guild, channel, userId, logId, "✅ チケットクローズ — 受け取り確認完了");
-}
-
-async function sendRejectLog(guild: Guild, targetUserId: string, rejectedBy: string, type: string, reason: string) {
-  try {
-    const _s = await getGuildSettings(guild.id);
-    const logId = getPurchaseCtx(_s).logChannelId || botConfig.ticketLogChannelId;
-    const ch = await guild.channels.fetch(logId);
-    if (!ch || !(ch instanceof TextChannel)) return;
-
-    await ch.send({
-      embeds: [
-        new EmbedBuilder().setColor(Colors.Red).setTitle(`❌ チケット却下 — ${type}`)
-          .addFields(
-            { name: "👤 申請者", value: `<@${targetUserId}>`, inline: true },
-            { name: "却下スタッフ", value: `<@${rejectedBy}>`, inline: true },
-            { name: "❌ 却下理由", value: reason, inline: false }
-          ).setTimestamp()
-      ],
-    });
-  } catch (err) {
-    logger.error({ err }, "Failed to send reject log");
+    logger.error({
+      channelId: channel.id,
+      logChannelId,
+      errorType: err instanceof Error ? err.name : "UnknownError",
+    }, "Failed to send ticket transcript log");
+    return false;
   }
 }
 
@@ -1788,51 +1847,15 @@ async function handleCloseCommand(interaction: ChatInputCommandInteraction) {
   const reason = interaction.options.getString("reason") ?? "スタッフによるクローズ";
   await interaction.reply({ content: `🔒 **${reason}** によりこのチケットをクローズします。`, flags: 64 });
 
-  // Send close log to appropriate channel
-  await sendCloseLog(interaction, ch, reason);
-
-  await closeTicketChannel(ch, interaction.user.id, reason);
-}
-
-const SUPPORT_PREFIXES = ["［🐛］", "［🚨］", "［⚖️］", "［❓］"];
-const PURCHASE_PREFIXES = ["［🔔］", "［🎥］"];
-
-async function sendCloseLog(
-  interaction: ChatInputCommandInteraction,
-  ch: TextChannel,
-  reason: string,
-): Promise<void> {
-  const guild = interaction.guild;
-  if (!guild) return;
-
-  const chName = ch.name;
-  const isSupport = SUPPORT_PREFIXES.some((p) => chName.startsWith(p));
-  const isPurchase = PURCHASE_PREFIXES.some((p) => chName.startsWith(p));
-  if (!isSupport && !isPurchase) return; // not a known ticket channel
-
-  const settings = await getGuildSettings(guild.id);
-  const logChannelId = isSupport
-    ? (getSupportCtx(settings).logChannelId || botConfig.supportLogChannelId || botConfig.ticketLogChannelId)
-    : (getPurchaseCtx(settings).logChannelId || botConfig.ticketLogChannelId);
-
-  try {
-    const logCh = await guild.channels.fetch(logChannelId);
-    if (!(logCh instanceof TextChannel)) return;
-
-    const embed = new EmbedBuilder()
-      .setColor(Colors.Red)
-      .setTitle("🔒 チケットクローズ")
-      .addFields(
-        { name: "📁 チャンネル", value: `#${ch.name}`, inline: true },
-        { name: "👤 クローズしたスタッフ", value: `<@${interaction.user.id}>`, inline: true },
-        { name: "📝 理由", value: reason, inline: false },
-      )
-      .setTimestamp()
-      .setFooter({ text: `チャンネルID: ${ch.id}` });
-
-    await logCh.send({ embeds: [embed] });
-  } catch (err) {
-    logger.error({ err }, "Failed to send close log");
+  const closed = await closeTicketChannel(ch, {
+    closedById: interaction.user.id,
+    reason,
+  });
+  if (!closed) {
+    await interaction.followUp({
+      content: "❌ TXTログを送信できなかったため、チャンネルは削除していません。ログチャンネルの権限を確認してください。",
+      flags: 64,
+    });
   }
 }
 
@@ -1864,13 +1887,61 @@ async function handleTicketAddCommand(interaction: ChatInputCommandInteraction) 
   }
 }
 
-async function closeTicketChannel(channel: TextChannel | null, targetUserId: string, reason: string) {
-  if (!channel) return;
+type CloseTicketOptions = {
+  requesterId?: string;
+  closedById: string;
+  reason: string;
+  title?: string;
+  extraFields?: { name: string; value: string; inline: boolean }[];
+};
+
+const closingTicketChannels = new Set<string>();
+
+async function closeTicketChannel(channel: TextChannel | null, options: CloseTicketOptions): Promise<boolean> {
+  if (!channel || closingTicketChannels.has(channel.id)) return false;
+  closingTicketChannels.add(channel.id);
+
   try {
-    await channel.send(`🔒 このチケットは **${reason}** により閉じられます。5秒後にチャンネルを削除します。`);
-    setTimeout(() => { channel.delete(`チケット${reason}: ${targetUserId}`).catch(() => {}); }, 5000);
+    const logChannelId = await resolveTicketLogChannelId(channel.guild, channel);
+    const logged = await sendTicketTranscriptLog(
+      channel.guild,
+      channel,
+      options.requesterId ?? null,
+      logChannelId,
+      options.title ?? "🔒 チケットクローズ",
+      [
+        { name: "🔒 クローズした人", value: `<@${options.closedById}>`, inline: true },
+        { name: "📝 理由", value: options.reason, inline: false },
+        ...(options.extraFields ?? []),
+      ],
+    );
+
+    if (!logged) {
+      closingTicketChannels.delete(channel.id);
+      await channel.send("❌ TXTログを送信できなかったため、このチャンネルは削除しませんでした。").catch(() => {});
+      return false;
+    }
+
+    await channel.send(`🔒 このチケットは **${options.reason}** により閉じられます。5秒後にチャンネルを削除します。`)
+      .catch((err: unknown) => {
+        logger.warn({ channelId: channel.id, errorType: err instanceof Error ? err.name : "UnknownError" }, "Failed to send ticket close notice");
+      });
+    setTimeout(() => {
+      void channel.delete(`チケット${options.reason}: ${options.closedById}`)
+        .catch((err: unknown) => {
+          logger.error({ channelId: channel.id, errorType: err instanceof Error ? err.name : "UnknownError" }, "Failed to delete closed ticket channel");
+        })
+        .finally(() => closingTicketChannels.delete(channel.id));
+    }, 5000);
+    return true;
   } catch (err) {
-    logger.error({ err }, "Failed to close ticket channel");
+    closingTicketChannels.delete(channel.id);
+    logger.error({
+      channelId: channel.id,
+      errorType: err instanceof Error ? err.name : "UnknownError",
+    }, "Failed to close ticket channel");
+    await channel.send("❌ TXTログを送信できなかったため、このチャンネルは削除しませんでした。").catch(() => {});
+    return false;
   }
 }
 
