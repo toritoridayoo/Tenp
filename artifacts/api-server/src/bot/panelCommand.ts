@@ -119,7 +119,7 @@ export async function handlePurchaseSendCommand(
       .setDescription(
         "申請したい内容に合わせて下のボタンを選んでください。\n\n" +
           (isAmazonMode
-            ? "🎁 **特典受け取り**\n　Amazonギフト券でのTori+ランク申請\n\n"
+            ? "🎁 **特典受け取り**\n　Amazonギフト券でのTori+ランクの申請など\n\n"
             : `🎮 **ランク受け取り**\n　Tori+ランク（永久版 / 1ヶ月版）の付与申請（現在の受付: ${rankPaymentLabel}）\n\n`) +
           (isAmazonMode ? "" : "🔑 **鍵・シャード受け取り**\n　Boothで購入した各種キー・シャードの受け取り申請\n\n") +
           "📺 **メディアランク申請**\n" +
