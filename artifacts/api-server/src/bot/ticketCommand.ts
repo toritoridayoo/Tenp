@@ -54,6 +54,10 @@ export async function handleTicketCommand(
         .setLabel("🌟 承認（永久）")
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
+        .setCustomId(`approve_custom_${user.id}`)
+        .setLabel("🗓️ 期間を指定して承認")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
         .setCustomId(`reject_${user.id}`)
         .setLabel("❌ 却下")
         .setStyle(ButtonStyle.Danger)

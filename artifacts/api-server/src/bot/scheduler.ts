@@ -1,7 +1,7 @@
 import { Client } from "discord.js";
 import { db } from "@workspace/db";
 import { roleGrantsTable } from "@workspace/db";
-import { and, eq, isNotNull, lte, sql } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { botConfig } from "./config.js";
 
@@ -45,13 +45,37 @@ async function checkExpiredRoles(client: Client) {
     for (const grant of expiredGrants) {
       try {
         const member = await guild.members.fetch(grant.userId).catch(() => null);
+        const otherActiveGrants = await db
+          .select({ id: roleGrantsTable.id })
+          .from(roleGrantsTable)
+          .where(
+            and(
+              eq(roleGrantsTable.guildId, grant.guildId),
+              eq(roleGrantsTable.userId, grant.userId),
+              eq(roleGrantsTable.roleId, grant.roleId),
+              eq(roleGrantsTable.removed, false),
+              or(
+                eq(roleGrantsTable.permanent, true),
+                isNull(roleGrantsTable.expiresAt),
+                gt(roleGrantsTable.expiresAt, now),
+              ),
+            ),
+          )
+          .limit(1);
 
         if (member) {
-          await member.roles.remove(grant.roleId, "Booth購入期間終了（1ヶ月）");
-          logger.info(
-            { userId: grant.userId, grantId: grant.id },
-            "Expired role removed"
-          );
+          if (otherActiveGrants.length === 0) {
+            await member.roles.remove(grant.roleId, "ランク付与期間終了");
+            logger.info(
+              { userId: grant.userId, grantId: grant.id },
+              "Expired role removed"
+            );
+          } else {
+            logger.info(
+              { userId: grant.userId, grantId: grant.id },
+              "Expired grant ended; another active grant keeps the role"
+            );
+          }
         } else {
           logger.warn(
             { userId: grant.userId, grantId: grant.id },

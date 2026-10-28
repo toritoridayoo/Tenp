@@ -15,6 +15,7 @@ import {
   PermissionFlagsBits,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
+  ThreadChannel,
   TextChannel,
   TextInputBuilder,
   TextInputStyle,
@@ -305,6 +306,20 @@ async function handleButtonInteraction(interaction: ButtonInteraction) {
     return;
   }
 
+  const customDurationApproveMatch = customId.match(/^approve_custom_(\d+)$/);
+  if (customDurationApproveMatch) {
+    const member = interaction.member as GuildMember | null;
+    if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
+      await interaction.reply({ content: "❌ このボタンはスタッフロールを持つメンバーのみ押せます。", flags: 64 });
+      return;
+    }
+    await interaction.showModal(buildCustomDurationApprovalModal(
+      customDurationApproveMatch[1]!,
+      interaction.message.id,
+    ));
+    return;
+  }
+
   // Approve buttons
   const approveMatch      = customId.match(/^approve_(1month|permanent)_(\d+)$/);
   const keyApproveMatch   = customId.match(/^key_approve_(\d+)$/);
@@ -418,6 +433,25 @@ function buildRejectReasonModal(type: "rank" | "key" | "media", targetId: string
         .setStyle(TextInputStyle.Paragraph)
         .setPlaceholder("例: 購入番号が確認できませんでした。")
         .setMaxLength(500)
+        .setRequired(true)
+    )
+  );
+  return modal;
+}
+
+function buildCustomDurationApprovalModal(targetId: string, messageId: string): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId(`approve_custom_days_${targetId}_${messageId}`)
+    .setTitle("🗓️ ランク付与期間を指定");
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("duration_days_input")
+        .setLabel("付与期間（日数・1～36500）")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("例: 45")
+        .setMinLength(1)
+        .setMaxLength(5)
         .setRequired(true)
     )
   );
@@ -577,6 +611,12 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   // Reject reason modals: reject_reason_{type}_{userId}_{messageId}
   const rejectModal = interaction.customId.match(/^reject_reason_(rank|key|media)_(\d+)_(\d+)$/);
   if (rejectModal) { await handleRejectReasonSubmit(interaction, rejectModal[1] as "rank" | "key" | "media", rejectModal[2]!, rejectModal[3]!); return; }
+
+  const customDurationModal = interaction.customId.match(/^approve_custom_days_(\d+)_(\d+)$/);
+  if (customDurationModal) {
+    await handleCustomDurationApprovalSubmit(interaction, customDurationModal[1]!, customDurationModal[2]!);
+    return;
+  }
 
   // Close reason modals: close_reason_modal_{type}_{userId}_{messageId}
   const closeModal = interaction.customId.match(/^close_reason_modal_(bug|report|appeal|inquiry|giveaway)_(\d+)_(\d+)$/);
@@ -1023,10 +1063,45 @@ async function handleCloseTicket(
 
 // ── Rank: approve ─────────────────────────────────────────────────────────
 
-async function handleRankApprove(
-  interaction: ButtonInteraction,
+async function handleCustomDurationApprovalSubmit(
+  interaction: ModalSubmitInteraction,
   targetUserId: string,
-  durationType: "1month" | "permanent"
+  messageId: string,
+) {
+  await interaction.deferReply({ flags: 64 });
+
+  const member = interaction.member as GuildMember | null;
+  if (!await isStaffInGuild(member, interaction.guildId ?? "")) {
+    await interaction.editReply("❌ この操作はスタッフロールを持つメンバーのみ行えます。");
+    return;
+  }
+
+  const rawDays = interaction.fields.getTextInputValue("duration_days_input").trim();
+  const days = Number(rawDays);
+  if (!/^\d+$/.test(rawDays) || !Number.isSafeInteger(days) || days < 1 || days > 36500) {
+    await interaction.editReply("❌ 付与期間は1～36500の整数（日数）で入力してください。");
+    return;
+  }
+
+  const channel = interaction.channel;
+  if (!(channel instanceof TextChannel) && !(channel instanceof ThreadChannel)) {
+    await interaction.editReply("❌ チケット内のフォームから操作してください。");
+    return;
+  }
+  const approvalMessage = await channel.messages.fetch(messageId).catch(() => null);
+  if (!approvalMessage) {
+    await interaction.editReply("❌ ランク申請のメッセージが見つかりません。");
+    return;
+  }
+
+  await handleRankApprove(interaction, targetUserId, { days }, approvalMessage);
+}
+
+async function handleRankApprove(
+  interaction: ButtonInteraction | ModalSubmitInteraction,
+  targetUserId: string,
+  durationType: "1month" | "permanent" | { days: number },
+  approvalMessage: import("discord.js").Message = (interaction as ButtonInteraction).message,
 ) {
   const guild = interaction.guild as Guild;
 
@@ -1035,12 +1110,21 @@ async function handleRankApprove(
   catch { await interaction.editReply(`❌ ユーザー <@${targetUserId}> がサーバーに見つかりません。`); return; }
 
   try {
+    const customDays   = typeof durationType === "object" ? durationType.days : null;
     const permanent    = durationType === "permanent";
-    const expiresAt    = permanent ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const durationDays = customDays ?? (permanent ? null : 30);
+    const expiresAt    = durationDays === null
+      ? null
+      : new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
     const product: ProductType = permanent ? "permanent" : "1month";
-    const productLabel = PRODUCT_LABELS[product];
-    const mcid         = extractField(interaction, "Minecraft ID");
-    const purchaseId   = extractField(interaction, "購入番号");
+    const productLabel = customDays === null
+      ? PRODUCT_LABELS[product]
+      : `Tori+ランク（${customDays}日間）`;
+    const periodLabel  = permanent
+      ? "🌟 永久"
+      : `${customDays === null ? "⏰ 1ヶ月" : `🗓️ ${customDays}日`}（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`;
+    const mcid         = extractFieldFromMessage(approvalMessage, "Minecraft ID");
+    const purchaseId   = extractFieldFromMessage(approvalMessage, "購入番号");
 
     // 自動付与モードなら RCON でゲーム内ランクも付与（設定は autorank ON/OFF 関係なく取得）
     const autorankOn  = await isAutorankEnabled(guild.id);
@@ -1050,7 +1134,7 @@ async function handleRankApprove(
     const roleId = autorankCfg?.rankRoleId || botConfig.grantRoleId;
     await targetMember.roles.add(roleId, "Booth購入承認");
     let rconNote = "";
-    if (autorankOn && autorankCfg && mcid) {
+    if (customDays === null && autorankOn && autorankCfg && mcid) {
       const result = await grantMinecraftRank(mcid, product, autorankCfg);
       rconNote = buildRconNote(result);
       if (!result.velocityOk || !result.lobbyOk) {
@@ -1064,7 +1148,10 @@ async function handleRankApprove(
       grantedBy: interaction.user.id, ticketChannelId: interaction.channelId, removed: false,
     });
 
-    await interaction.message.edit({
+    const gameGrantNote = customDays !== null
+      ? "指定期間の承認ではゲーム内RCON自動付与を行わず、スタッフが手動で付与してください。"
+      : rconNote;
+    await approvalMessage.edit({
       embeds: [
         new EmbedBuilder().setColor(Colors.Green).setTitle("✅ 承認済み — チケット終了")
           .addFields(
@@ -1073,8 +1160,8 @@ async function handleRankApprove(
             { name: "🧾 購入番号", value: `\`${purchaseId ?? "不明"}\``,           inline: true },
             { name: "📦 商品",     value: productLabel,                             inline: true },
             { name: "承認スタッフ", value: `<@${interaction.user.id}>`,            inline: true },
-            { name: "付与期間",    value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true },
-            ...(rconNote ? [{ name: "🎮 ゲーム内付与", value: rconNote, inline: false }] : []),
+            { name: "付与期間",    value: periodLabel, inline: true },
+            ...(gameGrantNote ? [{ name: "🎮 ゲーム内付与", value: gameGrantNote, inline: false }] : []),
           ).setTimestamp()
       ],
       components: [],
@@ -1082,22 +1169,36 @@ async function handleRankApprove(
 
     await sendDM(targetMember, new EmbedBuilder()
       .setColor(Colors.Green).setTitle("✅ ロール申請が承認されました")
-      .setDescription(autorankOn
-        ? "購入が確認され、Discordロールとゲーム内ランクが付与されました！"
-        : "あなたのロール申請が承認されました！")
+      .setDescription(customDays !== null
+        ? `${customDays}日間のDiscordロールが付与されました。ゲーム内ランクはスタッフが別途付与します。`
+        : autorankOn
+          ? "購入が確認され、Discordロールとゲーム内ランクが付与されました！"
+          : "あなたのロール申請が承認されました！")
       .addFields(
         { name: "📦 商品",  value: productLabel, inline: true },
-        { name: "付与期間", value: permanent ? "🌟 永久" : `⏰ 1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true }
+        { name: "付与期間", value: periodLabel, inline: true }
       ).setTimestamp()
     );
-    // 自動付与済みの場合はスタッフがゲーム内付与する必要がないため通知しない
-    if (!autorankOn) {
-      await sendApprovalNotification(guild, targetUserId, mcid ?? "不明", productLabel, permanent, expiresAt, interaction.user.id, 0x00BFFF, interaction.channelId);
+    // カスタム期間ではRCONを使わず、ゲーム内付与をスタッフに依頼する。
+    if (customDays !== null || !autorankOn) {
+      await sendApprovalNotification(
+        guild,
+        targetUserId,
+        mcid ?? "不明",
+        productLabel,
+        permanent,
+        expiresAt,
+        interaction.user.id,
+        0x00BFFF,
+        interaction.channelId ?? undefined,
+        periodLabel,
+      );
     }
 
     // チケットに確認メッセージを送信
-    if (interaction.channel instanceof TextChannel) {
-      if (autorankOn) {
+    const ticketChannel = interaction.channel;
+    if (ticketChannel instanceof TextChannel || ticketChannel instanceof ThreadChannel) {
+      if (autorankOn && customDays === null) {
         // 自動付与完了 → 受け取り確認ボタンを表示
         const receiptRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
@@ -1105,7 +1206,7 @@ async function handleRankApprove(
             .setLabel("✅ 受け取り確認")
             .setStyle(ButtonStyle.Success),
         );
-        await interaction.channel.send({
+        await ticketChannel.send({
           embeds: [
             new EmbedBuilder()
               .setColor(Colors.Green)
@@ -1119,16 +1220,20 @@ async function handleRankApprove(
         });
         await interaction.editReply(`✅ <@${targetUserId}> を承認しました。自動付与完了。${rconNote}`);
       } else {
-        await interaction.channel.send({
+        await ticketChannel.send({
           embeds: [
             new EmbedBuilder()
               .setColor(Colors.Green)
               .setTitle("✅ 購入が確認されました")
-              .setDescription("購入が確認されました！ゲーム内での付与までお待ちください。\n付与完了後、受け取り確認ボタンが表示されます。")
+              .setDescription(customDays !== null
+                ? `Discordロールを${customDays}日間付与しました。ゲーム内ランクはスタッフが手動で付与します。`
+                : "購入が確認されました！ゲーム内での付与までお待ちください。\n付与完了後、受け取り確認ボタンが表示されます。")
               .setTimestamp()
           ],
         });
-        await interaction.editReply(`✅ <@${targetUserId}> を承認しました。ゲーム内付与後に付与完了ボタンを押してください。`);
+        await interaction.editReply(customDays !== null
+          ? `✅ <@${targetUserId}> に${customDays}日間のロールを付与しました。ゲーム内ランクはスタッフによる手動付与です。`
+          : `✅ <@${targetUserId}> を承認しました。ゲーム内付与後に付与完了ボタンを押してください。`);
       }
     }
 
@@ -1408,7 +1513,7 @@ async function handleGrantComplete(interaction: ButtonInteraction) {
 
     if (ticketChannelId) {
       const ticketCh = await interaction.guild?.channels.fetch(ticketChannelId).catch(() => null);
-      if (ticketCh instanceof TextChannel) {
+      if (ticketCh instanceof TextChannel || ticketCh instanceof ThreadChannel) {
         const receiptRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
             .setCustomId(`user_receipt_${targetUserId}`)
@@ -1442,7 +1547,7 @@ async function handleGrantComplete(interaction: ButtonInteraction) {
 async function sendApprovalNotification(
   guild: Guild, targetUserId: string, mcid: string, productLabel: string,
   permanent: boolean, expiresAt: Date | null, approvedBy: string, color: number = Colors.Gold,
-  ticketChannelId?: string
+  ticketChannelId?: string, periodLabel?: string,
 ) {
   try {
     const _s = await getGuildSettings(guild.id);
@@ -1462,7 +1567,7 @@ async function sendApprovalNotification(
         { name: "👤 プレイヤー", value: `<@${targetUserId}>`, inline: true },
         { name: "🎮 Minecraft ID", value: `\`${mcid}\``, inline: true },
         { name: "📦 商品", value: productLabel, inline: true },
-        { name: "⏰ 付与期間", value: permanent ? "永久" : `1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`, inline: true },
+        { name: "⏰ 付与期間", value: periodLabel ?? (permanent ? "永久" : `1ヶ月（期限: ${expiresAt!.toLocaleDateString("ja-JP")}）`), inline: true },
         { name: "承認スタッフ", value: `<@${approvedBy}>`, inline: true },
         ...(ticketChannelId ? [{ name: "🎫 チケット", value: `<#${ticketChannelId}>`, inline: true }] : [])
       ).setTimestamp();
@@ -1953,13 +2058,17 @@ async function sendDM(member: GuildMember, embed: EmbedBuilder): Promise<void> {
   }
 }
 
-function extractField(interaction: ButtonInteraction, fieldNameFragment: string): string | null {
+function extractFieldFromMessage(message: import("discord.js").Message, fieldNameFragment: string): string | null {
   try {
-    const embed = interaction.message.embeds[0];
+    const embed = message.embeds[0];
     if (!embed) return null;
     const field = embed.fields.find((f) => f.name.includes(fieldNameFragment));
     return field ? field.value.replace(/`/g, "").trim() : null;
   } catch { return null; }
+}
+
+function extractField(interaction: ButtonInteraction, fieldNameFragment: string): string | null {
+  return extractFieldFromMessage(interaction.message, fieldNameFragment);
 }
 
 // ── Autorank: admin permission guard ─────────────────────────────────────

@@ -129,6 +129,10 @@ export async function createTicketChannel(
       .setLabel("✅ 承認")
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
+      .setCustomId(`approve_custom_${user.id}`)
+      .setLabel("🗓️ 期間を指定して承認")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId(`reject_${user.id}`)
       .setLabel("❌ 却下")
       .setStyle(ButtonStyle.Danger)
@@ -194,6 +198,10 @@ export async function createAmazonRankTicketChannel(
       .setCustomId(`approve_1month_${user.id}`)
       .setLabel("⏰ 1ヶ月ランクで承認")
       .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`approve_custom_${user.id}`)
+      .setLabel("🗓️ 期間を指定して承認")
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`reject_${user.id}`)
       .setLabel("❌ 却下")
